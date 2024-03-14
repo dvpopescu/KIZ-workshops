@@ -30,7 +30,7 @@ pre {
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-*Modern Methods in Ecological Modeling, Kunming Institute of Zoology, April 20243*
+*Modern Methods in Ecological Modeling, Kunming Institute of Zoology, April 2024*
 ```{r}
 
 ```
