@@ -1,0 +1,275 @@
+---
+title: "occupancy"
+author: "Viorel Popescu"
+date: "2023-10-05"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_depth: 2
+---
+
+<style type="text/css">
+
+body, td {
+   font-size: 14px;
+}
+code.r{
+  font-size: 12px;
+}
+pre {
+  font-size: 12px
+}
+</style>
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*Modern Methods in Ecological Modeling, Kunming Institute of Zoology, April 20243*
+```{r}
+
+```
+
+# OCCUPANCY MODELING
+
+Occupancy models have gained prominence since the seminal paper by Mackenzie et al. (2002) in Ecology, and the least known but equally important paper by Tyre et al. (2003) in Ecological Applications (see below) that articulated a category of models that explicilty incorporated and predicted detection probabilities for a single spcies during a single season. Since then, the methodological developments of occupancy modeling have been exponential, and extended to include multiple species, multiple seasons, multiple states (e.g., reproducing), multiple spatial scales, count data, and the applications have been increasingly complex (see new book by Mackenzie et al 2018). 
+
+MacKenzie, D. I., J. D. Nichols, G. B. Lachman, S. Droege, J. Andrew Royle, and C. A. Langtimm. 2002. *Estimating site occupancy rates when detection probabilities are less than one*. Ecology 83:2248–2255.
+Tyre, A. J., B. Tenhumberg, S. A. Field, D. Niejalke, K. Parris, and H. P. Possingham. 2003. *Improving precision and reducing bias in biological surveys: Estimating false-negative error rates*. Ecological Applications 13:1790–1801.
+MacKenzie, D. I., J. D. Nichols, J. A. Royle, K. H. Pollock, L. L. Bailey, and J. Hines. 2018. *Occupancy Estimation and Modeling: Inferring Patterns and Dynamics of Species Occurrence*. 2nd edition. Academic Press, Boston.
+
+
+There is huge hype around this framework, but what do these models do? The theory is strikingly simple despite the complex math. Basically, by surveying a single location multiple times within a *season* (defined based on species ecology and life history), and building a history of species detection/non-detection at a site, one can explicitly evaluate the probability of detecting the species (this is what we call the **observation model**, and it is essentially a logistic regression). This detection probability is then incorporated into the **state model**, which evaluates the probability of a species occurring at a site (this is just another logistic regression). Ideally, if the variabes used to model **detection probability** (e.g., time of day, time of year, weather during the survey, etc.) and **occurrence probability** (e.g., site-scpeifc variables such as land cover type, elevation, habitat structure, etc.), then the predicted **occupancy** (the proportion of sites occupied by the target species) should be higher than the *naive* (or observed) occupancy. This is because the model can differentiate between absence of a speices and non-detection as inferred from the detection history and its associated variables. For example, a site may happen to be surveyed (by chance) during times when detection of the species is low; as such, the species is never detected, but the species occupies the site. If relevant data on survey timing and site characteristics is collected and integrated into the model, then that site will be predicted to be occupied, as the site characteristics would indicate that the species should be there, while the survey variables would indicate that surveys were done at the wrong time.
+
+Next, we will implement 2 scripts tha will introduce you to occupancy modeling using package *unmarked* (Fiske and Chandler 2011) for program R.
+
+Fiske, I., and R. Chandler. 2011. *unmarked: an R package for fitting hierarchical models of wildlife occurrence and abundance*. Journal of Statistical Software 43:1–23.
+https://cran.r-project.org/web/packages/unmarked/vignettes/unmarked.pdf
+
+
+# LET'S START CODING!!!
+
+The objectives of this exercise are:
+   1) to introduce you to simulating occupancy data
+   2) to set up occupancy data for package 'unmarked'
+   3) to run simple (single-season) occupancy models and evaluate outputs
+
+First, install the R packages that we will use to implement occupancy models 
+
+```{r load packages}
+#install.packages(c("unmarked", "MuMIn"))
+
+library(unmarked)
+library(MuMIn)
+```
+
+# DATA SIMULATION AND ANALYSIS
+
+The best way to understand how modeling works in general is to simulate your own data, then run predictive models and evaluate the outputs. Because we know what to expect from simulated datasets (in this case, the TRUE occupancy of sites, the probbaility of detection), this exercise is a great way to both understand occupancy data structure, and how to evaluate the outputs of complex models.   
+
+First, we will simulate occupancy data, with the aim to understand the structure of single-season occupancy data, and evaluate patterns in simulated data 
+
+We will set up our sampling regime (number of visits, number of sites) and an empty vector of 'true' occupancy (**STATE PROCESS**) name *tocc* (stands for true occupancy).
+
+```{r create true occupancy dataframe} 
+set.seed(24) #So we all get same data set
+
+n_sites=150
+n_vis = 5
+
+tocc <- rep(0, n_sites)
+tocc <- as.data.frame(tocc)
+names(tocc) <- c("T1")
+head(tocc)
+```
+
+Next, we set up an empty matrix for our detection/non-detection field observations (**OBSERVATION PROCESS**)
+
+```{r create observed occupancy dataframe}
+obsocc <- matrix(rep(0, n_sites*n_vis), ncol=(n_vis),
+                 dimnames=list(paste("site", 1:n_sites, sep=""), 
+                 paste("v", 1:n_vis, sep="")))
+obsocc <- as.data.frame(obsocc)
+head(obsocc)
+```
+
+Now let's set values for psi (occupancy) and p (detection). We will tweak these variables for future simulations. Let's consider that psi = 0.7 (in other words, around 70% of the 100 sites are occupied), and p = 0.6 (detection probability is decently high, meaning that 4 survyes may be enough to conclude whether a species is absent with a 95% confidence; *see Table on slide 30 of Powerpoint lecture*).
+
+```{r set occupancy and detection probabilities}
+psi = 0.7
+p = 0.5
+
+```
+
+We are now ready to SIMULATE OCCUPANCY DATA, and fill the observed occupancy matrix. We will use *for loop* that iterates through the sites and assigns a 0 (absent) or 1 (present) for true occupancy based on random draws from a binomial distribution with a probability of psi=0.7. For sites that are occupied, the observations are also assigned a 0 (non-detection) or a 1 (detection) based on random draws from a binomial distribution with a probability p=0.6.
+
+```{r simulate true and observed occupancy data}
+for(i in 1:n_sites) {
+  tocc[i,1] = rbinom(1, 1, psi)                      # Simulate true site occupancy
+  obsocc[i,1:n_vis] = rbinom(n_vis, 1, tocc[i,1]*p)  # Simulate observed data
+}
+```
+
+Let's examine the simulated probability of occupancy, differences (if any) between true and observed occupancy. Are the results intuitive? 
+```{r check out simulated data}
+sim_psi = sum(tocc)/n_sites
+sim_psi
+
+# examine the true and observed occupancy 
+head(tocc)
+sum(tocc)
+
+table(tocc) 
+
+head(obsocc)
+sum(obsocc)
+
+```
+
+Let's format the data for *unmarked*; *unmarked* will take the data and create a new dataframe, called *dataUMF* in our case that contains all the pieces of the data that can be used in the models).
+The new object has 3 input requirements: (1) observed data (*obsocc*), (2) site-specific covariates used to model occupancy, and (3) survey-specific covariates used to model detection (we will not use this one for now since we did not simulate variables for modeling detection). 
+
+```{r}
+dataUMF <-  unmarkedFrameOccu(
+  y = obsocc
+  #siteCovs = data.frame()
+  #obsCovs = list()
+)
+
+plot(dataUMF)
+#str(dataUMF)
+```
+
+We are now ready to fit an occupancy model with 2 components, detection and occupancy in this exact order. We will run a Null model (intercept only for both detection and occupancy) since both the true occupancy and our observations were drawn from at random from binomial distributions. We wil lthen evaluate the putputs by looking at back-transformed coefficients
+
+```{r}
+fm1 = occu(~1 ~1, data=dataUMF)      
+summary(fm1)
+
+backTransform(fm1, "state") # Get estimates on probability scale for occupancy
+backTransform(fm1, "det") # Get estimates on probability scale for detection
+
+```
+
+
+
+Let's now assume that the occupancy probability across the 150 sites is influence by a site-level variable, vegetation height (*vegHt*), and that the probability of detecting our species is affected by a survey-level variable, *wind*, We will add these two variables to the *unmarked* object. 
+
+```{r}
+
+set.seed(24) #So we all get same data set
+
+n_sites=150
+n_vis = 5
+
+# Create a covariate called vegHt
+vegHt <- sort(runif(n_sites, -1, 1)) # Sort for graphical convenience
+
+# Choose parameter values for occupancy model and compute occupancy
+beta0 <- 0 # Logit-scale intercept
+beta1 <- 3 # Logit-scale slope for vegHt
+psi <- plogis(beta0 + beta1 * vegHt) # Occupancy probability
+
+plot(vegHt, psi, ylim = c(0,1), type = "l", lwd = 3) # Plot psi relationship
+
+# Now visit each site and observe presence/absence perfectly
+tocc <- rbinom(n_sites, 1, psi) # True presence/absence
+
+# Look at data so far
+table(tocc)
+
+# Plot the true system state
+#par(mfrow = c(1, 3), mar = c(5,5,2,2), cex.axis = 1.5, cex.lab = 1.5)
+plot(vegHt, tocc, xlab="Vegetation height", ylab="True presence/absence (z)", frame = F, cex = 1.5)
+plot(function(x) plogis(beta0 + beta1*x), -1, 1, add=T, lwd=3, col = "red")
+
+```
+
+```{r}
+# Create a covariate called wind
+wind <- array(runif(n_sites * n_vis, -1, 1), dim = c(n_sites, n_vis))
+
+# Choose parameter values for measurement error model and compute detectability
+alpha0 <- -2 # Logit-scale intercept
+alpha1 <- -3 # Logit-scale slope for wind 
+p <- plogis(alpha0 + alpha1 * wind) # Detection probability 
+plot(p ~ wind, ylim = c(0,1)) # Look at relationship
+
+# Take n_vis = 5 presence/absence measurements at each site 
+for(j in 1:n_vis) {
+obsocc[,j] <- rbinom(n_sites, tocc, p[,j]) 
+}
+sum(apply(obsocc, 1, max)) # Number of sites with observed presences 
+
+# Plot observed data and true effect of wind on detection probability
+plot(wind, as.matrix(obsocc), xlab="Wind", ylab="Observed det./nondetection data (obsocc)", frame = F, cex = 1.5)
+plot(function(x) plogis(alpha0 + alpha1*x), -1, 1, add=T, lwd=3, col = "red")
+```
+
+Let's look at the data and prepapre it for the new *unmrked* object
+
+```{r}
+# Look at the data: occupancy, true presence/absence (z), and measurements (y)
+alldata <- cbind(psi=round(psi,2), tocc=tocc, y1=obsocc[,1], y2=obsocc[,2], y3=obsocc[,3],
+      y4=obsocc[,4], y5=obsocc[,5])
+head(alldata)
+
+# Create factors
+time <- matrix(rep(as.character(1:n_vis), n_sites), ncol = n_vis, byrow = TRUE)
+hab <- c(rep("A", 50), rep("B", 50), rep("C", 50)) # Must have M = 150
+
+```
+
+Format data and summarize and vizualize the observation process
+
+```{r}
+
+umf <- unmarkedFrameOccu(
+  y = obsocc,                                            # Pres/Abs measurements
+  siteCovs = data.frame(vegHt = vegHt, hab = hab),  # site-specific covs.
+  obsCovs = list(wind = wind, time = time))         # obs-specific covs.
+summary(umf) 
+
+plot(dataUMF)
+str(dataUMF)
+```
+
+We are now ready to run an occupancy model with 2 components, detection and occupancy in this exact order. We will run a Null model (intercept only for both detection and occupancy), and a more complex model, with Region as a covariate for occupancy (i.e., to evaluate if there is a difference in occupancy between the two Regions (we know there isn't since the data are random and sites were also assigned randomly). 
+
+```{r}
+model.Null <- occu(~1 ~1, data=dataUMF)      
+summary(model.Null)
+
+fm1.occ <- occu(~wind ~vegHt, data=umf)
+summary(fm1.occ)
+
+# Predict occupancy and detection as function of covs (with 95% CIs)
+# Add truth from data simulation  
+newdat <- data.frame(vegHt=seq(-1, 1, 0.01))
+pred.occ <- predict(fm1.occ, type="state", newdata=newdat)
+newdat <- data.frame(wind=seq(-1, 1, 0.1))
+pred.det <- predict(fm1.occ, type="det", newdata=newdat)
+
+# ... for values of wind of -1 to 1
+newdat <- data.frame(wind=seq(-1, 1, , 5)) 
+predict(fm1.occ, type="det", newdata=newdat, append = T)
+
+```
+Fit detection-naive GLM to observed occurrence and plot comparison
+```{r}
+summary(fm.glm <- glm(apply(obsocc, 1, max) ~ vegHt, family=binomial))
+plot(vegHt, apply(obsocc, 1, max), xlab="Vegetation height", ylab="Observed occurrence ('ever observed ?')", frame = F, cex = 1.5)
+plot(function(x) plogis(beta0 + beta1*x), -1, 1, add=T, lwd=3, col = "red")
+lines(vegHt, predict(fm.glm,,"response"), type = "l", lwd = 3)
+lines(vegHt, predict(fm1.occ, type="state")[,1], col = "blue", lwd = 3)
+legend(-1, 0.9, c("Truth", "'LR' with p", "LR without p"), col=c("red", "blue", "black"), lty = 1, lwd=3, cex = 1.2)
+
+
+```
+
+# END OF OCCUPANCY SIMULATIONS

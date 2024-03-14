@@ -1,0 +1,264 @@
+---
+title: "Single-species multi-season (dynamic) occupancy models - data analysis"
+author: "Viorel Popescu (adapted from Olivier Gimenez)"
+date: "2023-10-05"
+output: html_document
+---
+
+<style type="text/css">
+
+body, td {
+   font-size: 14px;
+}
+code.r{
+  font-size: 12px;
+}
+pre {
+  font-size: 12px
+}
+</style>
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*Modern Methods in Ecological Modeling, Kunming Institute of Zoology, April 2024*
+
+# ANALYSIS OF A DYNAMIC OCCUPANCY DATASET
+
+We will employ a multi-season occupancy framework in 'unmarked', using function 'colext'. We use data from *Mapping and explaining wolf recolonization in France using dynamic occupancy models and opportunistic data* by Louvrier et al. in Ecography available at <https://onlinelibrary.wiley.com/doi/abs/10.1111/ecog.02874>. Detections and non-detections data were collected between 1994 and 2017 (23 years or primary occasions). Occasions are months December, January, February and March (4 visits or secondary occasions). A 100km$^2$ grid was overlaid over France, and cells were considered as sites. See paper for more details. 
+
+
+```{r load packages, set WD and load data}
+library(tidyverse) # manipulate and visualize data
+library(unmarked) # occupancy modelling
+library(sf) # spatial dataviz
+
+setwd('C:\\Users\\viore\\Dropbox\\Columbia\\KIZ\\workshop materials\\dynamic occupancy')
+
+# read detection/non-detection data
+wolf <- read.csv("wolf_data.csv")
+#str(wolf)
+```
+There are > 3000 cells in rows. In columns we have 23 years times 4 visits, arranged in visits within years: Visit 1 to visit 4 for year 1994 in the first four columns, then visit 1 to visit 4 for year 1995, and so on.
+
+Let's add covariates
+
+```{r add effort data, environmental covariates and information on movement}
+
+effort <- read.csv("wolf_effort_data.csv")
+#str(effort)
+
+envcov <- read.csv("wolf_envcovs_data.csv")
+#str(envcov)
+
+LD <- read.csv("wolf_longdisp_data.csv")
+#str(LD)
+
+SD <- read.csv("wolf_shortdisp_data.csv")
+#str(SD)
+```
+
+Other covariates we may want to consider, particularly for modeling extinction and colonization probabilities are: a year effect (categorical data with each year as a level) and a linear trend effect (continuous year variable)
+
+```{r year and trend covariates}
+# Year-effect
+year <- matrix(rep(c('01','02','03','04','05','06','07','08','09','10','11','12','13','14','15','16','17','18','19','20','21','22','23'),nrow(wolf)), 
+               nrow = nrow(wolf), 
+               ncol = 23, 
+               byrow = TRUE)
+head(year)
+
+# trend in time
+trendyear <- matrix(rep(1:23,nrow(wolf)), 
+                    nrow=nrow(wolf),
+                    ncol=23, 
+                    byrow=TRUE)
+head(trendyear)
+```
+
+Last, we'll need a covariate to assess a visit (or a month) effect, that varies by sites, visits and years, usually referred to as 'survey-covariate' or 'observation covariate':
+```{r}
+occ <- array(0,c(3450,4,23))
+for (i in 1:3450){
+	for (j in 1:23){
+		occ[i,1:4,j] <- c('1','2','3','4') # dec, jan, feb, mar
+		if (effort[i,j] == 0) occ[i,1:4,j] <- NA
+				}
+	}
+occbis <- occ[,,1]
+for (i in 2:23){
+	occbis <- cbind(occbis,occ[,,i])
+}
+tail(occbis) # 3450 x 92 ou 92 est 4 occ x 23 ans
+```
+
+Now, we need to format the data and prepare all the pieces needed to build an unmarked object for dynamic occupancy models: the observations, site level (environmental) and observation level (month effect) and yearly site-level covariates (effort, year effect, trend and long and short-distance dispersal) 
+
+Site-level covariates first:
+```{r}
+sites.covs <- data.frame(
+  forest = envcov[,"p_forest"], # forest cover
+  agr = envcov[,"p_agri"], # farmland cover
+  rock = envcov[,"p_rock"], # rock cover
+  halt = envcov[,"p_halt"], # high altitude
+  alt = envcov[,"p_alti"], # altitude
+  dbarr = envcov[,"p_dbarr"], # distance to closest barrier
+  acc = envcov[,"p_road"]) # road density
+```
+
+Yearly site-level covariates:
+```{r}
+yearly.site.covs <- list(
+  effort = effort, # effort
+  year = year, # year effect
+  trendyear = trendyear, # linear trend over time
+  SD = SD, # short distance
+  LD = LD) # long distance
+```
+
+Observation covariates:
+```{r}
+obs.covs <- list(OCC = occbis)
+```
+
+Organize detection/non-detection data + all covariates in a data.frame that can be used by unmarked 
+```{r create unmarked object}
+umf <- unmarkedMultFrame(y = wolf, 
+                         siteCovs = sites.covs,
+                         yearlySiteCovs = yearly.site.covs, 
+                         obsCovs = obs.covs,
+                         numPrimary = 23)
+summary(umf)
+```
+
+Let's test some models!!! First we start with a constant model (intercept-only)  for 3 components of the model: initial occupancy, extinction, colonization, and use variable 'effort' to model detection 
+```{r}
+fm0 <- colext(
+  psiformula = ~ 1,     # initial occupancy
+  gammaformula =  ~ 1,  # colonization
+  epsilonformula = ~ 1, # extinction
+  pformula = ~ effort,  # detection
+  data = umf, # data
+  control = list(trace = 1)) # display number of iterations by blocks of 10
+```
+
+Inspect results:
+```{r}
+fm0
+
+coef(fm0) # inspect coefficients/parameters
+
+# get estimates on the regular scale (we need to backtransform the estimates to their regular scale) 
+backTransform(fm0, type = "col") # colonization
+backTransform(fm0, type = "ext") # extinction
+backTransform(fm0, type = "psi") # occupancy
+
+
+```
+
+
+Let's examine the probability of detection of 'effort':
+```{r}
+# create new data grid
+effort_grid <- seq(min(yearly.site.covs$effort), max(yearly.site.covs$effort), length = 100)
+# predict on logit scale
+logit_det <- coef(fm0)[4] + coef(fm0)[5] * effort_grid
+
+# backtransform
+det <- plogis(logit_det)
+
+# plot
+plot(x = effort_grid, 
+     y = det, 
+     type = 'l', 
+     xlab = "effort", 
+     ylab = "Estimated detection probability", 
+     lwd= 3)
+```
+
+
+Here we fit the model with all covariates as considered by Louvrier et al. This will take a while; sit back and relax :-)
+```{r}
+fm <- colext(
+  psiformula = ~ 1,                                            # initial occupancy
+  gammaformula =  ~ forest + agr + halt + alt + SD + LD,       # colonization
+  epsilonformula = ~ 1,                                        # extinction
+  pformula = ~ effort + acc + OCC,                             # detection
+  data = umf, # data
+  control = list(trace = 1), # display number of iterations by blocks of 10
+  se = FALSE) # do not compute SE and confidence intervals to reduce computational burden
+```
+
+Inspect results (NA's are produced because we did not compute SE's when we fitted the model):
+```{r}
+fm
+coef(fm)
+
+```
+
+
+Assess model goodness-of-fit; it takes a very long time
+#```{r goodness of fit}
+parboot(fm)
+plot(fm)
+#```
+
+We now proceed with occupancy predictions across our study period. This wil ltell us if there trends in occupancy 
+```{r predict occupancy in Year 1}
+# predicted occupancy in year 1
+E.psi1 <- predict(fm, type = "psi")
+head(E.psi1)
+mean_psi1 <- mean(E.psi1[,1])
+mean_psi1
+
+# predict occupancy probabilities for years 2 through end of study
+E.psi <- projected(fm)
+E.psi
+
+#E.psi.smoothed <- smoothed(fm)
+#E.psi.smoothed
+```
+
+We can calculate bootstrapped standard errors, but it will take a while!!! You may want to do this at home; if you do, delete the hashtags before ``` in the chunk below
+#```{r bootstrapped SEs}
+## Find bootstrap standard errors for smoothed trajectory
+model.LS2 <- nonparboot(model.LS2, B = 100)  # This takes a while!
+SEs <- model.LS2@smoothed.mean.bsse
+#```
+
+Create a new object that combines the predicted occupancy and the standard errors for each year (use the chunk above if u want to get the SEs)
+#```{r}
+psi.SEs <- data.frame(cbind(E.psi[2,], SEs[1,]))
+psi.SEs
+colnames(psi.SEs) <- c("OccProb", "StdErr")
+psi.SEs
+psi.SEs$Year <- c('01','02','03','04','05','06','07','08','09','10','11','12','13','14','15','16','17','18','19','20','21','22','23')
+psi.SEs
+#```
+
+If you don't have the patience to wait for the SE computation, just plot the occupancy predictions; first create an object woth the occupancy predictions and the years; you can use the same ggplot code to plot the occupancy + SE estimates
+```{r}
+psi.SEs <- data.frame(E.psi[2,])
+psi.SEs
+colnames(psi.SEs) <- c("OccProb")
+psi.SEs
+psi.SEs$Year <- c('01','02','03','04','05','06','07','08','09','10','11','12','13','14','15','16','17','18','19','20','21','22','23')
+psi.SEs
+```
+
+Plot predicted occupancy through time (clear the hashtag 3 lines below to plot SEs (if you compute them))
+```{r}
+ggplot(psi.SEs, aes(x=Year, y=OccProb)) + 
+#  geom_errorbar(aes(ymin=OccProb-StdErr, ymax=OccProb+StdErr), width=.1) + 
+  #expand_limits(y=0) +                        # Expand y range
+  #scale_y_continuous(breaks=0:1 * 0.1) +
+  geom_line() +
+  geom_point() +
+  ylab("Occupancy probability") +
+  ylim(0,0.25) +
+  xlab("Year") +
+  theme_bw()
+```

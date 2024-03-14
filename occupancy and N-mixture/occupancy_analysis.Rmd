@@ -1,0 +1,241 @@
+---
+title: "Single-species single-season occupancy models - dataset and analysis"
+author: "Viorel Popescu"
+date: "2023-10-05"
+output: html_document
+---
+
+<style type="text/css">
+
+body, td {
+   font-size: 14px;
+}
+code.r{
+  font-size: 12px;
+}
+pre {
+  font-size: 12px
+}
+</style>
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*Modern Methods in Ecological Modeling, Kunming Institute of Zoology, April 2024*
+```{r}
+
+```
+
+
+# ANALYSIS OF AN OCCUPANCY DATASET
+
+After simulating and analyzing simulated data, let's analyze an occupancy dataset of mink frog (Lithobates septentrionalis) occurrence from the Adirondack Mountains, New York State
+
+ The specific objectives of this document are:
+   To document the data management and occupancy analysis process;
+   To conduct a simple occupancy analysis in R using the unmarked package; and
+   To explore occupancy predictions and prepare the foundation for multi-year (dynamic) occupancy models
+
+```{r set up working directory and upload data}
+setwd('C:\\Users\\viore\\Dropbox\\Columbia\\KIZ\\workshop materials\\occupancy and N-mixture')
+
+mink <- read.csv("minkfrogs_occ.csv", header=T)
+
+names(mink)
+str(mink)
+
+# we need to 'attach' the file for unmarked to work; usually it is not 
+# recommended to use this function
+attach(mink) 
+
+library(unmarked)
+library(MuMIn)
+```
+
+First,  calculate the naive occupancy (not adjusted for detection probability) by dividing the number of sites where species was detected to the total number of sites
+
+```{r maive occupancy}
+minkfrog_naive <- sum(apply(mink[,3:6], 1, sum) > 0) / nrow(mink)
+minkfrog_naive
+```
+
+Create an R object that can be read by the 'unmarked' package. The object contains 3 types of data:
+  1) detection/nondetection data (the observations grouped into a matrix "y")
+  2) site-level covariates; these can be any variables that do not vary with survey occasion,
+             such as landscape characteristics, habitat types, site characteristics etc.
+            - these variables are used to model OCCUPANCY; they can also be used to model DETECTION (not shown here)
+  3) observation-level covariates; these can be any variables recorded at the time of survey
+             that may influence detection
+             - these variables are used to model DETECTION
+
+```{r create an R object that unmarked can recognize}
+minkUMF <- with(mink, {
+  unmarkedFrameOccu(
+    
+    y = cbind(LISE1, LISE2, LISE3, LISE4),
+    
+    siteCovs = data.frame(scale(JulyTemp), scale(DO), scale(DistMFbreed), Beaver),
+    
+    obsCovs = list(Date = scale(cbind(Julian1, Julian2, Julian3, Julian4)),
+                   Wind = cbind(Wind1, Wind2, Wind3, Wind4),
+                   Sky = cbind(Sky1, Sky2, Sky3, Sky4)))
+})
+```
+
+The analysis has 2 stages: First we need to evaluate the best predictors for detection. Therefore, we run several models that contains the same suite of site-related variables (for modeling occupancy), but various combinations of survey-specific variables for modeling detection. The goal is to identify the best variables that explain detection probability, when then use them in the next step of the analysis.   
+
+```{r run models to evaluate the best detection covariates}
+mink.d1 = occu(~Date + Wind + Sky ~scale.JulyTemp. + scale.DO. + scale.DistMFbreed., data=minkUMF)
+#summary(mink.d1)
+
+mink.d2 = occu(~Date + Sky ~scale.JulyTemp. + scale.DO. + scale.DistMFbreed., data=minkUMF)
+summary(mink.d2)
+
+mink.d3 = occu(~Date  ~scale.JulyTemp. + scale.DO. + scale.DistMFbreed., data=minkUMF)
+#summary(mink.d3)
+
+mink.d4 = occu(~Sky  ~scale.JulyTemp. + scale.DO. + scale.DistMFbreed., data=minkUMF)
+#summary(mink.d4)
+
+mink.d5 = occu(~Date + Wind  ~scale.JulyTemp. + scale.DO. + scale.DistMFbreed., data=minkUMF)
+#summary(mink.d5)
+```
+
+Next we implement model selection via AICc; we need to create a list of models, give them names that make sense, create a selection table and identify the best model that explains detection. 
+
+```{r detection model selection using AICc}
+modlist_d <- list (DateWindSky = mink.d1, DateSky = mink.d2, 
+                   Date = mink.d3, Sky = mink.d4, DateWind = mink.d5)
+
+selection_d = model.sel(modlist_d)
+selection_d
+```
+
+The best model is mink.d2: variables Date and Sky are best for explaining variation in detection probability. We now use these 2 variables to build several models that explore predictors for occupancy.
+
+```{r run several occupancy models}
+# climate predictors 
+mink.o1 = occu(~Date + Sky ~scale.JulyTemp., data=minkUMF)
+
+# landscape predictors 
+mink.o2 = occu(~Date + Sky ~scale.DistMFbreed. + factor(Beaver), data=minkUMF)
+
+# pond predictors 
+mink.o3 = occu(~Date + Sky ~scale.DO., data=minkUMF)
+summary(mink.o3)
+
+# climate and pond predictors
+mink.o4 = occu(~Date + Sky ~scale.JulyTemp. + scale.DO., data=minkUMF)
+
+# landscape and pond predictors
+mink.o5 = occu(~Date + Sky ~scale.DistMFbreed. + factor(Beaver) + scale.DO., data=minkUMF)
+
+# landscape and climate predictors
+mink.o6 = occu(~Date + Sky ~scale.DistMFbreed. + factor(Beaver) + scale.JulyTemp., data=minkUMF)
+```
+
+We are ready to implement model selection via AICc; we need to create a list of models, give them names that make sense, create a selection table and identify the best model that explains detection. 
+
+```{r final model selection}
+modlist_o <- list(JTemp = mink.o1, MFBreedBeaver = mink.o2, 
+                  DO = mink.o3, JTempDO = mink.o4,
+                  MFBreedBeaverDO = mink.o5, FBreedBeaverJTemp = mink.o6)
+
+selection_o = model.sel(modlist_o)
+selection_o
+```
+
+**Model Averaging:** instead of choosing the BEST model, we should draw inferences on occupancy and detection based on all models, weighed by their AICc weight, and use all models whose cumulative AICc weight <=0.95. The function below returns the averaged model coefficients (RECENT WORK CLAIMS THIS IS WRONG, SO WE WILL NOT DWELL ON THEM) 
+
+```{r model averaging}
+mod.avg = model.avg(selection_o, cumsum(weight) <= .95)
+mod.avg
+```
+
+We can estimate detection probability and occupancy probability using model averaging (THIS IS CORRECT)
+
+```{r model-averaged detection and occupancy predictions}
+detpred = predict(mod.avg, type="det")
+detpred
+hist(detpred$fit)
+
+psipred = predict(mod.avg, type="state")
+psipred
+hist(psipred$fit)
+```
+
+Using the predicted occupancy estimates, we can now get the probability of occupancy CORRECTED for imperfect detection, also known as Proportion of Areas Occupied (PAO) = mean of 'psipred', and evaluate the difference between naive and occupancy predictions
+
+```{r calculate proportion of area occupied}
+PAO = mean(psipred$fit)
+PAO
+ 
+PAO-minkfrog_naive
+```
+
+There is a difference between the estimated Proportion of Area Occupied and the naive occupancy estimates, suggesting that one or more sites that were surveyed are likely occupied by mink frogs, but were never detected during the study. As such, not accounting for imperfect detection would have underestimated the true occupancy of mink frogs in the study area.
+
+Finally, let's plot some of our findings; for now, let's use the top model (model.o3) to examine the relationships between the probability of detection and each of the detection covariates and between the probability of occupancy and the occupancy covariate DO
+
+```{r detection covariate plots}
+# plot detection predictions 
+# predictions for DATE
+Date_grid <- seq(min(minkUMF@obsCovs$Date), 
+                   max(minkUMF@obsCovs$Date), 
+                   length = 50)
+grid <- expand.grid(Date = Date_grid, Sky = mean(minkUMF@obsCovs$Sky))
+Date_pred <- predict(mink.o3, type = "det", as.data.frame(grid))
+str(Date_pred)
+
+plot(Date_grid,
+     Date_pred$Predicted, 
+     type = "l", 
+     lwd = 3, 
+     xlab = "Julian Day", 
+     ylab = "estimated detection prob")
+lines(Date_grid, Date_pred$lower)
+lines(Date_grid, Date_pred$upper)
+
+# predictions for SKY
+Sky_grid <- seq(min(minkUMF@obsCovs$Sky), 
+                 max(minkUMF@obsCovs$Sky), 
+                 length = 50)
+grid <- expand.grid(Date = mean(minkUMF@obsCovs$Date), Sky = Sky_grid)
+Sky_pred <- predict(mink.o3, type = "det", as.data.frame(grid))
+str(Sky_pred)
+
+plot(Sky_grid,
+     Sky_pred$Predicted, 
+     type = "l", 
+     lwd = 3, 
+     xlab = "Sky", 
+     ylab = "estimated detection prob")
+lines(Sky_grid, Sky_pred$lower)
+lines(Sky_grid, Sky_pred$upper)
+```
+
+```{r occupancy covariate plots}
+DO_grid <- seq(min(minkUMF@siteCovs$scale.DO.), 
+                max(minkUMF@siteCovs$scale.DO.), 
+                length = 50)
+scale.DO. <- DO_grid
+DO_pred <- predict(mink.o3, type = "state", as.data.frame(DO_grid))
+str(DO_pred)
+
+plot(DO_grid,
+     DO_pred$Predicted,
+     type = "l", 
+     lwd = 3, 
+     xlab = "DO", 
+     ylab = "estimated occupancy prob")
+
+lines(DO_grid, DO_pred$lower)
+lines(DO_grid, DO_pred$upper)
+```
+
+# **THE END**
+
+
