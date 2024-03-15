@@ -211,7 +211,7 @@ plot(wind, as.matrix(obsocc), xlab="Wind", ylab="Observed det./nondetection data
 plot(function(x) plogis(alpha0 + alpha1*x), -1, 1, add=T, lwd=3, col = "red")
 ```
 
-Let's look at the data and prepapre it for the new *unmrked* object
+Let's look at the data and prepare it for the new *unmarked* object
 
 ```{r}
 # Look at the data: occupancy, true presence/absence (z), and measurements (y)
