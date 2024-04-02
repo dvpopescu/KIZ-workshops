@@ -145,7 +145,7 @@ plot(dataUMF)
 #str(dataUMF)
 ```
 
-We are now ready to fit an occupancy model with 2 components, detection and occupancy in this exact order. We will run a Null model (intercept only for both detection and occupancy) since both the true occupancy and our observations were drawn from at random from binomial distributions. We wil lthen evaluate the putputs by looking at back-transformed coefficients
+We are now ready to fit an occupancy model with 2 components, detection and occupancy in this exact order. We will run a Null model (intercept only for both detection and occupancy) since both the true occupancy and our observations were drawn from at random from binomial distributions. We will then evaluate the putputs by looking at back-transformed coefficients
 
 ```{r}
 fm1 = occu(~1 ~1, data=dataUMF)      
