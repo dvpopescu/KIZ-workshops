@@ -1,0 +1,184 @@
+---
+title: "Capture-recapture analysis using 'marked'"
+author: "Viorel Popescu"
+date: "2024-03-11"
+output: html_document
+---
+
+<style type="text/css">
+
+body, td {
+   font-size: 14px;
+}
+code.r{
+  font-size: 12px;
+}
+pre {
+  font-size: 12px
+}
+</style>
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*Modern Methods in Ecological Modeling, Kunming Institute of Zoology, April 2024*
+```{r}
+
+```
+
+
+An alternative to the much **beloved program MARK** is the R package *'marked'*, developed by Jeff Laake and collaborators (Laake et al. 2013). The full citation for this package is below, and the vignette that explains the reasoning behind the development of this package can be found here: 
+
+* Marked Vignette (https://cran.r-project.org/web/packages/marked/vignettes/markedVignette.pdf)
+  Laake, J.L., D.S. Johnson, and P.B. Conn. 2013. marked: An R package for maximum-likelihood
+  and MCMC analysis of capture-recapture data. Methods Ecol. Evol. 4:885-890.
+
+In general, the package 'marked' aims to ease the implementation of capture-recapture models, and add other methods not available in program MARK.  
+
+## LET'S START CODING!!!
+
+First, install the package 'marked' and call it into R. Then set the working directory to the capture-recapture file provided (AA for marked.txt). This dataset if for two colonies of swifts (Apus apus), a small insectivorous bird. The dataset contains two colonies, coded "G" (good) and "P" (poor), and the goal is to evaluate differences in apparent survival and recapture probability between the two colonies. However, this dataset can be used to examine trends in survival through time and other explorations.
+
+```{r}
+#install.packages("marked")
+library(marked)
+setwd('C:\\Users\\viore\\Dropbox\\Columbia\\KIZ\\workshop materials\\capture-recapture')
+```
+
+Next, you need to ask R to correctly read the recapture history as a *character*, and the grouping variable (colony in this case) as a *factor*. Otherwise, R will mess up and everything will be converted to integers, which 'marked' will absolutely **hate**. To do so, you need to use the *colClasses* function as described below.
+
+```{r}
+AA <- read.table("AA for marked.txt", colClasses=c("character","numeric","factor"), header=T)
+
+# let's check out the structure of this file to make sure the 
+# correct variables types are read into R 
+str(AA)
+head(AA)
+```
+
+We can now start processing the data to create the input files for *'marked'*. The process is similar to the one that we implemented using package *'RMark'*. First, we use the *process.data* function to declare that this is Cormack-Jolly-Seber model, and the groups that we are interested in (in this case, colony). Then, function *make.design.data* will create the design matrix for this dataset. 
+
+```{r}
+AA.proc <- process.data(AA,model="CJS", groups = "colony")
+AA.ddl <- make.design.data(AA.proc)
+```
+
+We now have all the building blocks to start parameterizing capture-recapture models! So, let's try to run a model using *'marked'*! Let's model survival probability (**Phi**) as a function of *colony* and *time*, and recapture probability (**p**) as a function of time. The formulas below are intuitive
+
+```{r}
+mod.Phicolonytime.ptime <- crm(AA.proc,AA.ddl, model = 'csj', groups = "colony",
+                    model.parameters = list(Phi = list(formula=~colony+time),
+                                            p = list(formula=~time)),hessian=T)
+
+# let's check out the results! Copy and paste them into a document, 
+# as we will want to compare them to the results from RMark.
+mod.Phicolonytime.ptime
+
+
+mod.Phicolony.ptime <- crm(AA.proc,AA.ddl, model = 'csj', groups = "colony",
+                    model.parameters = list(Phi = list(formula=~1),
+                                            p = list(formula=~1)),hessian=T)
+
+# let's check out the results! Copy and paste them into a document, 
+# as we will want to compare them to the results from RMark.
+mod.Phicolony.ptime
+
+
+```
+
+Also, let's compute the 'real' parameter estimates
+```{r}
+#phis <- compute.real(mod.Phisex.pdot,"Phi",unique=TRUE,vcv=TRUE)
+phis <- predict(mod.Phicolony.ptime)$Phi
+phis
+ps <- predict(mod.Phicolony.ptime)$p
+ps
+```
+
+
+Run several other models using the code above and let's explore other model parameterizations.
+1) code Phi AND p as a function of 'time'
+2) code Phi AND p as 'time-invariant' (no change through 'time' or by 'colony')
+3) code Phi as a function of 'colony' and p as a function of 'time' and 'colony'
+
+### STOP HERE FOR NOW!!!!
+
+
+## Run multiple models (and create a function to do so!!!)
+
+One the advantages of using *'marked'* is that one can perform multiple model fitting at once. For this we can create a "wrapper", or a function that will allow us to fit all possible combinations of **Phi** and **p** submodels. We need to declare each type of submodel for calculating survival and recapture probabilities as a function of our covariates of interest (colony and time in our case).
+
+```{r}
+fit.models=function()
+   {
+   
+   #declare all the combinations of variables for survival and recapture
+   
+      Phi.dot = list(formula=~1)  # survival is constant
+      Phi.colony = list(formula=~colony)  # survival varies by colony
+      Phi.time = list(formula=~time)  # survival varies by time 
+      Phi.colony.time = list(formula=~colony+time)  # survival by colony and time
+      p.dot = list(formula=~1)  # recapture is constant
+      p.colony = list(formula=~colony)  # recapture varies by colony
+      p.time = list(formula=~time)  # recapture varies by time
+      p.colony.time = list(formula=~colony+time)  # recapture by colony and time
+     
+     
+   # create a list of all possible models containing Phi and p 
+   # (all combinaitons of the above submodels)
+     cml=create.model.list(c("Phi","p"))
+     
+   # Run all the models at once using the model list,  data and design matrices 
+     results=crm.wrapper(cml,data=AA.proc, ddl=AA.ddl,
+                         external=FALSE,accumulate=FALSE,
+                         method="Nelder-Mead",hessian=TRUE)
+   
+   # Now use function 'return' to colect all the models                     
+     return(results)
+     }
+```
+You will notice that nothing happended, and no models were run. This is because we just 'declared' the function to R, and now R is ready to receive the command Now, we use our newly created function **fit.models** to fit the models and collect the outputs.
+
+```{r}
+AA.models=fit.models()
+AA.models
+```
+Let's investigate model predictions for survival and detection based on out top model, which is denoted as model '2' in the AICc table above (see first table column). Are there significant differences in survival between the 2 colonies? HINT: evaluate whether the 95% confidence interval (denoted as 'lcl' (lower) and 'ucl' (upper)) overlap.
+
+```{r}
+Phi_by_colony <- predict(AA.models[[2]])$Phi
+Phi_by_colony
+p_by_colony.time <- predict(AA.models[[2]])$p
+p_by_colony.time
+```
+
+Let's plot the results of showing survival through time (although the time-dependent model did not come out as one of our top models). First, let's pick a model that includes time as a variable for phi by checking he model number in the AICc table above (model 13 seems to be one we can use).   
+
+
+```{r}
+Phi_by_year <- predict(AA.models[[13]])$Phi
+Phi_by_year
+```
+
+Plot the estimates ('estimate' in our object above) and the 95% confidence intervals around those estimates (denoted as 'ucl' = upper confidence limit and 'lcl' = lower confidence limit). 
+```{r}
+#install.packages("Hmisc")
+library(Hmisc)
+
+plot(1:nrow(Phi_by_year),Phi_by_year$estimate,xlab="Year",ylab="Survival",
+   ylim=c(0,1),main="Variability in Survival, Apus")
+errbar(1:nrow(Phi_by_year),Phi_by_year$estimate,Phi_by_year$ucl,
+   Phi_by_year$lcl,add=T)
+```
+
+How about quantifying the stochasticity in survival rates? For this, we need to calculate the standard deviation of the yearly survival estimates; note that we will ignore the variation around yearly estimates, and just use the mean survival estimates. 
+```{r}
+mean(Phi_by_year$estimate)
+sd(Phi_by_year$estimate)
+```
+
+
+# The End! Isn't Life Beautiful???

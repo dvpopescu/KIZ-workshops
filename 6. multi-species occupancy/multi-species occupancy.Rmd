@@ -1,0 +1,165 @@
+---
+title: "multi-species occupancy"
+author: "Viorel Popescu"
+date: "2024-04-02"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_depth: 2
+---
+
+<style type="text/css">
+
+body, td {
+   font-size: 14px;
+}
+code.r{
+  font-size: 12px;
+}
+pre {
+  font-size: 12px
+}
+</style>
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*Modern Methods in Ecological Modeling, Kunming Institute of Zoology, April 2024*
+```{r}
+
+```
+
+
+# Fitting multi-species occupancy models with msPGOcc()
+
+*spOccupancy* uses nearly identical syntax for fitting multi-species occupancy models as it does for single-species models and provides the same functionality for posterior predictive checks, model assessment and selection using WAIC and k-fold cross-validation, and out of sample prediction. The msPGOcc() function fits nonspatial multi-species occupancy models using Pólya-Gamma latent variables, which results in substantial increases in run time compared to standard implementations of logit link multi-species occupancy models. msPGOcc() has exactly the same arguments as PGOcc():
+
+```{}
+msPGOcc(occ.formula, det.formula, data, inits, n.samples, priors, 
+        n.omp.threads = 1, verbose = TRUE, n.report = 100, 
+        n.burn = round(.10 * n.samples), n.thin = 1, n.chains = 1,
+        k.fold, k.fold.threads = 1, k.fold.seed, k.fold.only = FALSE, ...)
+```
+
+For illustration, we will use the Hubbard Brook data in hbef2015, which is integrated in the spOccupancy package and we will model occurrence for all 12 species in the community.
+
+```{r}
+library(spOccupancy)
+data(hbef2015)
+str(hbef2015) # Remind ourselves of what's in it (not shown).
+```
+
+We will model occurrence for all species as a function of linear and quadratic terms for elevation, and detection as a function of linear and quadratic day of survey as well as the time of day during which the survey was conducted. These models are specified in occ.formula and det.formula as before, which reference variables stored in the data list. Random intercepts can be included in both the occurrence and detection portions of the occupancy model using lme4 syntax (Bates et al. 2015). For multi-species models, the multi-species detection-nondetection data y is now a three-dimensional array with dimensions corresponding to species, sites, and replicates. This is how the data are provided in the hbef2015 object, so we don’t need to do any additional preparations.
+
+```{r}
+occ.ms.formula <- ~ scale(Elevation) + I(scale(Elevation)^2)
+det.ms.formula <- ~ scale(day) + scale(tod) + I(scale(day)^2)
+str(hbef2015)
+```
+
+
+Next we specify the initial values in inits. For multi-species occupancy models, we supply initial values for community-level and species-level parameters. In msPGOcc(), we will supply initial values for the following parameters: alpha.comm (community-level detection coefficients), beta.comm (community-level occurrence coefficients), alpha (species-level detection coefficients), beta (species-level occurrence coefficients), tau.sq.beta (community-level occurrence variance parameters), tau.sq.alpha (community-level detection variance parameters, z (latent occurrence variables for all species). These are all specified in a single list. Initial values for community-level parameters are either vectors of length corresponding to the number of community-level detection or occurrence parameters in the model (including the intercepts) or a single value if all parameters are assigned the same initial values. Initial values for species level parameters are either matrices with the number of rows indicating the number of species, and each column corresponding to a different regression parameter, or a single value if the same initial value is used for all species and parameters. The initial values for the latent occurrence matrix are specified as a matrix with N rows corresponding to the number of species and J columns corresponding to the number of sites.
+
+```{r}
+N <- dim(hbef2015$y)[1]
+ms.inits <- list(alpha.comm = 0, 
+                 beta.comm = 0, 
+                 beta = 0, 
+                 alpha = 0,
+                 tau.sq.beta = 1, 
+                 tau.sq.alpha = 1, 
+                 z = apply(hbef2015$y, c(1, 2), max, na.rm = TRUE))
+```
+
+In multi-species models, we specify priors on the community-level coefficients (or hyperparameters) rather than the species-level effects. For nonspatial models, these priors are specified with the following tags: 
+- beta.comm.normal (normal prior on the community-level occurrence mean effects), 
+- alpha.comm.normal (normal prior on the community-level detection mean effects), 
+- tau.sq.beta.ig (inverse-Gamma prior on the community-level occurrence variance parameters), 
+- tau.sq.alpha.ig (inverse-Gamma prior on the community-level detection variance parameters). 
+Each tag consists of a list with elements corresponding to the mean and variance for normal priors and scale and shape for inverse-Gamma priors. Values can be specified individually for each parameter or as a single value if the same prior is assigned to all parameters of a given type.
+
+By default, we set the prior hyperparameter values for the community-level means to a mean of 0 and a variance of 2.72, which results in a vague prior on the probability scale as we discussed for the single-species spatial occupancy model. Below we specify these priors explicitly. For the community-level variance parameters, by default we set the scale and shape parameters to 0.1 following the recommendations of (Lunn et al. 2013), which results in a weakly informative prior on the community-level variances. This may lead to shrinkage of the community-level variance towards zero under certain circumstances so that all species will have fairly similar values for the species-specific covariate effect (Gelman 2006), although we have found multi-species occupancy models to be relatively robust to this prior specification. However, if you want to explore the impact of this prior on species-specific covariate effects, we recommend running single-species occupancy models for a select number of species in the data set, and assessing how large the differences in the estimated species-specific effects are between the single-species model estimates and those from the multi-species model. Below we explicitly set these default prior values for our HBEF example.
+
+```{r}
+ms.priors <- list(beta.comm.normal = list(mean = 0, var = 2.72),
+                  alpha.comm.normal = list(mean = 0, var = 2.72), 
+                  tau.sq.beta.ig = list(a = 0.1, b = 0.1), 
+                  tau.sq.alpha.ig = list(a = 0.1, b = 0.1))
+```
+
+All that is now left to do is specify the number of threads to use (n.omp.threads), the number of MCMC samples (n.samples), the amount of samples to discard as burn-in (n.burn), the thinning rate (n.thin), and arguments to control the display of sampler progress (verbose, n.report).
+
+```{r}
+# Approx. run time:  6 min
+out.ms <- msPGOcc(occ.formula = occ.ms.formula, 
+                  det.formula = det.ms.formula, 
+                  data = hbef2015, 
+                  inits = ms.inits, 
+                  n.samples = 30000, 
+                  priors = ms.priors, 
+                  n.omp.threads = 1, 
+                  verbose = TRUE, 
+                  n.report = 6000, 
+                  n.burn = 10000,
+                  n.thin = 50, 
+                  n.chains = 3)
+```
+
+The resulting object out.ms is a list of class msPGOcc() consisting primarily of posterior samples of all community and species-level parameters, as well as some additional objects that are used for summaries, prediction, and model fit evaluation. We can display a nice summary of these results using the summary() function as before. For multi-species objects, when using summary we need to specify the level of parameters we want to summarize. We do this using the argument level, which takes values community, species, or both to print results for community-level parameters, species-level parameters, or all parameters. By default, level is set to both to display both species and community-level parameters.
+
+```{r}
+summary(out.ms)
+# Or more explicitly
+# summary(out.ms, level = 'both')
+```
+
+Looking at the community-level variance parameters, we see substantial variability in the average occurrence (the intercept) for the twelve species, as well as considerable variability in the effect of elevation across the community. There appears to be less variability across species in the detection portion of the model. We can look directly at the species-specific effects to confirm this. All community-level Rhat values are less than 1.1 and most species-level Rhat values are less than 1.1, with the exception of a few of the parameters for rare species. Mixing of the MCMC chains appears adequate when looking at the ESS values, although we can clearly see the ESS is lower for rare species (e.g., AMRE, BAWW) compared to more common species in the forest (e.g., OVEN, REVI).
+
+# Posterior predictive checks
+We can use the ppcOcc() function to perform a posterior predictive check, and summarize the check with a Bayesian p-value using the summary() function, all as shown before. The summary() function again requires the level argument to specify if you want an overall Bayesian p-value for the entire community (level = 'community'), each individual species (level = 'species'), or for both (level = 'both'). By default, we set `level = ‘both’.
+
+```{r}
+# Approx. run time: 20 sec
+ppc.ms.out <- ppcOcc(out.ms, 'chi-squared', group = 1)
+
+summary(ppc.ms.out)
+```
+
+
+The Bayesian p-value for the overall community suggests an adequate model fit, but we see clear variation in the values for each individual species. We should explore this further in a complete analysis.
+
+# Model selection using WAIC and k-fold cross-validation
+We can compute the WAIC for comparison with alternative models using the waicOcc() function.
+
+```{r}
+waicOcc(out.ms)
+```
+
+As of v0.7.0, the waicOcc() function also contains the argument by.sp for all multi-species models supported by spOccupancy, which allows us to calculate WAIC individually for each species.
+
+```{r}
+waicOcc(out.ms, by.sp = TRUE)
+```
+
+Note that the sum of the WAIC values for each individual species is equal to the overall WAIC value for the model.
+
+k-fold cross-validation is again accomplished using the k.fold argument as we have seen previously. For multi-species occupancy models, using multiple threads can greatly reduce the time needed for k-fold cross-validation, so we encourage the use of multiple threads if such computing power is readily available. Using up to k
+ threads will generally involve substantial decreases in run time. For multi-species models, a separate deviance measure is reported for each species as a measure of predictive capacity, allowing for comparisons across multiple models for individual species, as well as for the entire community (by summing all species-specific values).
+
+# Prediction
+Prediction with msPGOcc objects is exactly analogous to what we saw with PGOcc. We can use the *predict* function along with a data frame of covariates at new locations. We can predict across the entire HBEF for all twelve species using the elevation data stored in hbefElev.
+
+```{r}
+elev.pred <- (hbefElev$val - mean(ovenHBEF$occ.covs[, 1])) / sd(ovenHBEF$occ.covs[, 1])
+X.0 <- cbind(1, elev.pred, elev.pred^2)
+
+out.ms.pred <- predict(out.ms, X.0)
+```
+
+THE END

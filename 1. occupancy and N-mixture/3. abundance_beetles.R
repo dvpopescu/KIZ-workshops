@@ -164,7 +164,7 @@ plot(GC_grid,
      GC_pred$Predicted,
      type = "l", 
      lwd = 3,
-     xlab = "scaled Ground COver", 
+     xlab = "scaled Ground Cover", 
      ylab = "Abundance")
 
 lines(GC_grid, GC_pred$lower)

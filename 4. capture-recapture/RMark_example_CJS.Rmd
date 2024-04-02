@@ -1,0 +1,154 @@
+---
+title: "Capture-recapture analysis using 'RMark'"
+author: "Viorel Popescu"
+date: "2023-11-11"
+output: html_document
+---
+
+<style type="text/css">
+
+body, td {
+   font-size: 14px;
+}
+code.r{
+  font-size: 12px;
+}
+pre {
+  font-size: 12px
+}
+</style>
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*Population Ecology GR6230, Fall 2023*
+```{r}
+
+```
+
+
+While program **MARK** is the definitive resource for implementing a wide variety of capture-recaptuRe models, constructing and defining the model can become cumbersome for open population models that involve many parameters. Specifically, creating the PIM (parameter index matrix) for models with complex structures can be difficult for people just starting with this class of models, and their parameterization may be prone to human error. As such, Jeff Laake (2013) developed an R interface for program MARK, called *RMark*, which facilitates the implementation of a wide variety of capture-recapture models (although not all the options provided by program MARK). 
+*IMPORTANT*: Please note that to run *RMark*, you need to still have program **MARK** installed, as RMark is just an R interface that call the functions implemented in **MARK** (which is coded using **FORTRAN**, a powerful language that was developed in the 50's by IBM and allowed the US space program to take on the Russians; FORTRAN is still widely used today). 
+
+Laake, J.L. (2013). RMark: An R Interface for Analysis of Capture-Recapture Data with MARK. AFSC Processed Rep 2013-01, 25p. Alaska Fish. Sci. Cent., NOAA, Natl. Mar. Fish. Serv., 7600 Sand Point Way NE, Seattle WA 98115.
+  
+  
+A comprehensive overview of using package *RMark* is available here: <http://www.phidot.org/software/mark/docs/book/pdf/app_3.pdf>
+
+
+The goal of this exercise is to use *RMark* to implement a simple capture-recapture analysis of the 'Apus' data. 
+
+## LET'S START CODING!
+
+First, install the package *RMark* and call it into R. Then set the working directory to the capture-recapture file provided (AA.inp). The file needs to contain the history of recaptures in one column, and grouping variables of covariates as subsequent columns.
+
+```{r}
+#install.packages("RMark")
+library(RMark)
+setwd('C:\\Users\\Viorel\\Dropbox\\Columbia\\teaching\\PopEco_Fall2023\\Labs\\Lab9 - Capture-recapture')
+```
+
+Next, convert the .inp file to a file that can be used in *RMARK*. The Apus data has a grouping variable, which we will call *colony*, with 2 levels: colony P and colony G
+
+```{r}
+Apus <- convert.inp("AA for RMark", group.df=data.frame(colony=c("P","G")))
+head(Apus)
+```
+
+Next, we use a function called *process.data* to initialize several variables (e.g., number of capture occasions, time intervals) that are often specific to the capture-recapture model being fitted to the data. It also is used to (1) define groups in the data that represent different levels of one or more factor covariates (e.g., colony in the case of the Apus data), (2) define time intervals between capture occasions (if not 1), and (3) create an age structure for the data, if any. For the Apus dataset, we will define the class of models as Cormack-Jolly-Seber, which estimate apparent survival from capture-recaptiure data and open populations (animals are allowed to enter or exit the population via births, deaths, emigration and immigration). The survival parameter Phi is *apparent* because animals coud either die or emigrate. These moels do not allow for this **very important** distinction.
+
+```{r}
+my.Apus <- process.data(Apus, model="CJS", groups = "colony")
+my.Apus
+```
+
+Now for the hard part, creating the design data and PIM's (Parameter Index Matrix). Just kidding... this is why *RMark* is so awesmome: it does all the work for you, without the human error aspect and saves a lot of time for complex models. For each type of parameter in the analysis model (e.g, p, Phi), this function creates design data based on the parameter index matrix (PIM) in MARK terminology. Design data relate parameters to the sampling and data structures; whereas data relate to the object (animal) being sampled. Design data relate parameters to time, age, cohort and group structure.
+
+```{r}
+ddl <- make.design.data(my.Apus)
+#ddl
+```
+
+Next, we set up the various combinations of variables for modeling survival (Phi) and recapture probability (p). The next few lines of code set up the combinations of parameters that we want to run for either survival (Phi) or recapture (p), according to your hypotheses of what variables influcnce these 2 parameters. Each combination is stored into a object, so we will give names that make sense to those objects. 
+
+```{r}
+Phi.dot = list(formula=~1)  # survival is constant
+Phi.colony = list(formula=~colony)  # survival varies by colony
+Phi.time = list(formula=~time)  # survival varies by time 
+Phi.colony.time = list(formula=~colony+time)  # survival by colony and time
+p.dot = list(formula=~1)  # recapture is constant
+p.colony = list(formula=~colony)  # receptures varies by colony
+p.time = list(formula=~time)  # recapture varies by time
+p.colony.time = list(formula=~colony+time)  # recapture by colony and time
+```
+
+Now that we set up the various combinations of variables that we think may affect survival and recapture probabilities, let's run capture-recapture models with *RMark*!!! One-by-one... 
+
+First, a model where both survival and recapture vary with recapture occasion (or time); remember how you built the PIMs in **MARK**. Playing with the boxes was a lot of fun. How many parameters are we estimating here? 
+
+```{r}
+# step 1 is to create the model by specifying the parameters for survival 
+# and recapture probability
+Model.Phi.time.p.time <- make.mark.model(my.Apus,ddl,
+  parameters=list(Phi=Phi.time,p=p.time))
+#Model.Phi.time.p.time
+
+# step 2 is to run the capture-recapture model, and explore the summary
+Model.Phi.time.p.time <- run.mark.model(Model.Phi.time.p.time)
+summary(Model.Phi.time.p.time)
+```
+
+We'll run a couple more models: survival and recapture varies by colony, and by colony and time
+
+```{r}
+Model.Phi.colony.p.colony = make.mark.model(my.Apus,ddl,
+  parameters=list(Phi=Phi.colony,p=p.colony))
+#Model.Phi.colony.p.colony
+
+Model.Phi.colony.p.colony <- run.mark.model(Model.Phi.colony.p.colony)
+summary(Model.Phi.colony.p.colony)
+
+
+Model.Phi.colony.time.p.colony.time <- make.mark.model(my.Apus,ddl, parameters=list(Phi=Phi.colony.time,p=p.colony.time))
+#Model.Phi.colony.time.p.colony.time
+
+Model.Phi.colony.time.p.colony.time <- run.mark.model(Model.Phi.colony.time.p.colony.time)
+summary(Model.Phi.colony.time.p.colony.time)
+```
+Now let's evaluate how did the models do in an information-theoretic framework, namely model selection based on AICc. The function below looks through all the objects that were classified as MARK models 
+
+```{r}
+Apus.results <- collect.models(type="CJS")
+Apus.results
+```
+
+Voila, a beautiful model selection table with models ranked by AICc!!!
+
+Because each model ran above explains some variation in the data, but produce slightly different estimates for Phi and p, we may want to take a model-averaging approach for estimating these parameters.
+```{r}
+Apus.mod.avg <- model.average(Apus.results, vcv=TRUE)
+Apus.mod.avg$estimates
+```
+
+Another way to proceed is to run all possible combinations of survival and recapture models declared above. While this may be appealing when dealing with many combinations of variables, it must be used with caution because it can be interpreted as exploratory (as opposed to formulating hypotheses about variables that may drive variation in survival or recapture).  
+
+```{r}
+# first create a list of models; R looks for objects that are of class  
+Apus.model.list=create.model.list("CJS")
+Apus.model.list
+
+# now ran ALL MODELS AT ONCE
+Apus.all.results=mark.wrapper(Apus.model.list, data=my.Apus,ddl=ddl)
+Apus.all.results
+```
+
+Similarly, we can do model averaging across all models
+```{r}
+Apus.all.mod.avg <- model.average(Apus.all.results, vcv=TRUE)
+Apus.all.mod.avg$estimates
+```
+
+**FIN**
