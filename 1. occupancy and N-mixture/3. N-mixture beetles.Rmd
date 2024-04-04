@@ -1,0 +1,229 @@
+---
+title: "N-mixture beetles"
+author: "Viorel Popescu"
+date: "2024-04-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# N-mixture (abundance) models for saproxylic beetles
+
+This code analyzes abudance data for the saproxylic beetle *Plagionotus detritus* collected in the Iron Gates Natural Park, Romania and published in Brodie et al. 2019.
+
+Brodie, B. S., V. D. Popescu, R. Iosif, et al. 2019. Non-lethal monitoring of longicorn beetle communities using generic pheromone lures and occupancy models. Ecological Indicators 101:330-340.
+
+
+# DATA SETUP
+
+Set working directory, read data from a .csv file and examine the data structure; add the two R packages used by this analysis: *unmarked* for N-mixture analyses and *MuMIn* for multi-model inference
+
+```{r}
+library(unmarked)
+library(MuMIn)
+
+beetles <- read.csv("data/Pdet_dataset.csv")
+names(beetles)
+attach(beetles)
+str(beetles)
+```
+
+Setup *unmarked* dataframe using site-specific and survey-specific covariates survey-specific covariates are: JulianDay (day of year) and Precipitation; site-specific covariates are  Ground cover and Average tree diameter
+
+Create survey-specific covariates and standardize them
+
+```{r}
+JulianDay = matrix(cbind(Julian1, Julian2, Julian3, Julian4,
+                         Julian5, Julian6, Julian7, Julian8,
+                         Julian9, Julian10, Julian11, Julian12))
+JulianDay = matrix(scale(JulianDay), nrow=50, byrow=F)
+
+Precipitation = matrix(cbind(Precip1, Precip2, Precip3, Precip4,
+                             Precip5, Precip6, Precip7, Precip8,
+                             Precip9, Precip10, Precip11, Precip12))
+Precipitation = matrix(scale(Precipitation), nrow=50, byrow=F)
+```
+
+Create an *unmarked* object for our focal species, Plagionotus detritus.
+Create an R object that can be read by the 'unmarked' package. The object contains 3 types of data:
+  1) detection/nondetection data (the observations grouped into a matrix "y")
+  2) site-level covariates; these can be any variables that do not vary with survey occasion,
+             such as landscape characteristics, habitat types, site characteristics etc.
+            - these variables are used to model ABUNDANCE; they can also be used to model DETECTION
+  3) observation-level covariates; these can be any variables recorded at the time of survey
+             that may influence detection
+             - these variables are used to model DETECTION
+
+```{r}
+PdetUMF <- with(beetles, {
+  unmarkedFramePCount(
+    y = cbind(Pdet1, Pdet2, Pdet3, Pdet4, Pdet5, Pdet6, Pdet7, 
+              Pdet8, Pdet9, Pdet10, Pdet11, Pdet12),
+    siteCovs = data.frame(scale(GroundCover), scale(AvgDiameter)),
+    obsCovs = list(Julian = JulianDay,
+                   Precip = Precipitation))
+  
+})
+
+plot(PdetUMF)
+```
+
+Count data can follow Poisson or Negative Binomial distributions; if there are a lot of zeroes in the data, count data can also follow a Zero-Inflated Poisson distribution; as such, the first step is to parameterize a model with haphazardly selected variables and test which type of distribution fits the data best.
+
+For simplicity, wil will only use 2 site-level variables in this exercise: Average tree diameter and Ground cover
+
+```{r}
+mP <- pcount(~Julian+Precip ~scale.AvgDiameter. + scale.GroundCover., 
+             mixture="P", K=100, data=PdetUMF) # Poisson distribution "P"
+mNB <- pcount(~Julian+Precip ~scale.AvgDiameter. + scale.GroundCover., 
+              mixture="NB", K=100, data=PdetUMF) # negative binomial "NB"
+mZIP <- pcount(~Julian+Precip ~scale.AvgDiameter. + scale.GroundCover., 
+              mixture="ZIP", K=100, data=PdetUMF) # zero-inflated Poisson "ZIP"
+
+# model selection using AICc
+modelList <- fitList("modP" = mP, "modNB" = mNB, "modZIP" = mZIP)
+modSel_Pdet <- modSel(modelList)
+modSel_Pdet
+```
+
+The distribution that fits the data best is Negative Binomial and will continue using this distribution for th erest of the analysis.
+
+The analysis has 2 stages: First we need to evaluate the best predictors for detection. Therefore, we run several models that contains the same suite of site-related variables (for modeling abundance), but various combinations of survey-specific variables for modeling detection. The goal is to identify the best variables that explain detection probability, when then use them in the next step of the analysis.   
+
+# BUILD AND RUN DETECTION MODELS (using a full model for abundance)
+
+Run several models for detection; the goal is to compare models with different parameterizations for detection using the same vaiables for abundance across models. The function is *pcount* and contains 2 sub-models: the first "~" is the detection submodel; the seond "~" is the abundance submodel.   
+
+```{r}
+m0 <- pcount(~1 ~scale.AvgDiameter.+ scale.GroundCover., mixture="NB", K=100, data=PdetUMF)
+m1 <- pcount(~Julian ~scale.AvgDiameter.+ scale.GroundCover., mixture="NB", K=100, data=PdetUMF)
+m2 <- pcount(~Precip ~scale.AvgDiameter.+ scale.GroundCover., mixture="NB", K=100, data=PdetUMF)
+m3 <- pcount(~Julian+Precip ~scale.AvgDiameter.+ scale.GroundCover., mixture="NB", K=100, data=PdetUMF)
+
+# detection model selection using AICc
+modelList <- fitList(Null = m0, "mod1" = m1, "mod2" = m2, "mod3" = m3)
+modSel_Pdet <- modSel(modelList, nullmod = 'Null')
+modSel_Pdet
+```
+
+Model 3, which includes both precipitation and Julain day performs best, and we will use these 2 variables in the next step
+
+# BUILD AND RUN MODELS FOR ABUNDANCE
+
+We now run several models that include different variables explaining abundance and the best detection variable(s) identified above. We are only running a small set of models here, but one can build and run many more models based on a priori hypotheses, exppert knowledge about limiting and favorable factors, etc. 
+
+```{r}
+Pdet_Null <- pcount(~Julian+Precip  ~1, mixture="NB", K=100, data=PdetUMF)
+Pdet_m0 <- pcount(~Julian+Precip  ~scale.GroundCover., mixture="NB", K=100, data=PdetUMF) 
+Pdet_m1 <- pcount(~Julian+Precip  ~scale.AvgDiameter., mixture="NB", K=100, data=PdetUMF)
+Pdet_m2 <- pcount(~Julian+Precip  ~scale.AvgDiameter. + scale.GroundCover., 
+                  mixture="NB", K=100, data=PdetUMF) 
+
+# model selection using AICc 
+modelList_Pdet <- fitList(Null = Pdet_Null, m0 = Pdet_m0, m1 = Pdet_m1, m2 = Pdet_m2)
+modSel_Pdet <- modSel(modelList_Pdet, nullmod = 'Null')
+modSel_Pdet
+```
+
+The best model only contains Ground Cover as a predictor for beetle abundance. Next, we compute model predictions and estimates of abundance and detection for the species of interest.
+
+```{r}
+# extract coeficients for best model
+summary(Pdet_m0)
+coef(Pdet_m0)
+```
+
+```{r}
+# estimate individuals per site from the best model
+Pdet_abund <- predict(Pdet_m0, type="state")
+Pdet_abund # predicted abundance at each trap location 
+mean(Pdet_abund$Predicted) # mean predicted abundance across all traps
+```
+
+```{r}
+# compute overall abundance estimates
+lcab <- linearComb(Pdet_m0, c(1, 1), type="state")
+lcab <- backTransform(lcab)
+lcab
+```
+
+```{r}
+# estimate probability of detection from the best model
+Pdet_det <- predict(Pdet_m0, type="det")
+head(Pdet_det)
+mean(Pdet_det$Predicted)
+```
+
+```{r}
+# compute overall detection estimates
+lcdet <- linearComb(Pdet_m0, c(1, 1, 1), type="det")
+lcdet <- backTransform(lcdet)
+lcdet
+``` 
+
+# PLOT RELATIONSHIPS BETWEEN VARIABLES AND DETECTION PROBABILITY
+
+To plot these relationships, we first create a new data frame for prediction with the  variable of interest ranging from min to max values, while keeping all the other variables in the model at their mean value.
+
+```{r}
+# predictions for date
+Date_grid <- seq(min(PdetUMF@obsCovs$Julian), 
+                 max(PdetUMF@obsCovs$Julian), 
+                 length = 50)
+grid <- expand.grid(Julian = Date_grid, Precip = mean(PdetUMF@obsCovs$Precip))
+Date_pred <- predict(Pdet_m0, type = "det", as.data.frame(grid))
+str(Date_pred)
+
+plot(Date_grid,
+     Date_pred$Predicted, 
+     type = "l", 
+     lwd = 3,
+     ylim = c(0,0.3),
+     xlab = "scaled Julian Date", 
+     ylab = "Detection probability")
+lines(Date_grid, Date_pred$lower)
+lines(Date_grid, Date_pred$upper)
+```
+
+```{r}
+# predictions for precipitation
+Precip_grid <- seq(min(PdetUMF@obsCovs$Precip), 
+                max(PdetUMF@obsCovs$Precip), 
+                length = 50)
+grid <- expand.grid(Julian = mean(PdetUMF@obsCovs$Julian), Precip = Precip_grid)
+Precip_pred <- predict(Pdet_m0, type = "det", as.data.frame(grid))
+str(Precip_pred)
+
+plot(Precip_grid,
+     Precip_pred$Predicted, 
+     type = "l", 
+     lwd = 3, 
+     ylim = c(0,0.3),
+     xlab = "scaled Precipitation", 
+     ylab = "Detection probability")
+lines(Precip_grid, Precip_pred$lower)
+lines(Precip_grid, Precip_pred$upper)
+```
+
+# PLOT RELATIONSHIPS BETWEEN VARIABLE Ground Cover AND ABUNDANCE
+
+```{r}
+GC_grid <- seq(min(PdetUMF@siteCovs$scale.GroundCover.), 
+               max(PdetUMF@siteCovs$scale.GroundCover.), 
+               length = 50)
+scale.GroundCover. <- GC_grid
+GC_pred <- predict(Pdet_m0, type = "state", as.data.frame(GC_grid))
+str(GC_pred)
+
+plot(GC_grid,
+     GC_pred$Predicted,
+     type = "l", 
+     lwd = 3,
+     xlab = "scaled Ground Cover", 
+     ylab = "Beetle abundance")
+
+lines(GC_grid, GC_pred$lower)
+lines(GC_grid, GC_pred$upper)
+```
