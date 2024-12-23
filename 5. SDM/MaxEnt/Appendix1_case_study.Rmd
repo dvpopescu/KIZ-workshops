@@ -1,6 +1,6 @@
 ---
 title: "Species Distribution Model with Maxent in R"
-author: "Viorel Popescu, based on code from Xiao Feng, Cassondra Walker, and Fikirte Gebresenbet"
+author: "based on code from Xiao Feng, Cassondra Walker, and Fikirte Gebresenbet"
 date: "03/05/2024"
 output:
   html_document:
@@ -10,6 +10,8 @@ output:
   pdf_document:
     toc: yes
     toc_depth: '4'
+editor_options: 
+  chunk_output_type: console
 ---
 ##1. Set up the working environment  
 ###1.1 Load packages  
@@ -19,23 +21,32 @@ Running Maxent in R requires several packages. Specifically, the "dismo" package
 ```{r setup1,message=FALSE,warning=FALSE}
 library(raster)
 library(dismo)
+library(rJava)
+library(spThin)
+library(ENMeval)
+library(maxnet)
+#install.packages("remotes")
+#remotes::install_github("johnbaums/rmaxent")
+library(rmaxent)
+
 #Sys.getenv("JAVA_HOME")
 #Sys.setenv(JAVA_HOME="C:\\Program Files\\Java\\jre6\\bin\\server")
-library(rJava)
+
+setwd('/cloud/project/4. Species Distribution Models/MaxEnt')
 ```
 																												   
 #####Thread 2
-```{r setup2,message=FALSE}
+```{r setup2, message=FALSE}
 #If you are using a Mac machine, an additional step may be needed before loading rJava package
 #dyn.load('/Library/Java/JavaVirtualMachines/jdk1.8.0_144.jdk/Contents/Home/jre/lib/server/libjvm.dylib')
-library("rJava")
+library(rJava)
 ```
 
 #####Thread 3
 settings for the R-markdown document
 ```{r setup_knit}
 library("knitr")
-knitr::opts_knit$set(root.dir = 'C:/Users/viore/Dropbox/Columbia/KIZ/workshop materials/SDM/code/workshopMaxEnt')
+knitr::opts_knit$set(root.dir = 'MaxEnt')
 opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
 ```
 
@@ -63,23 +74,26 @@ In our example, we use bioclimatic variables (downloaded from worldclim.org) as 
 #####Thread 5 
 ```{r load_rasters, message=FALSE, warning=FALSE}
 # prepare folders for data input and output
-if(!file.exists("../workshopMaxEnt/data")) dir.create("../workshopMaxEnt/data")
-if(!file.exists("../workshopMaxEnt/data/bioclim")) dir.create("../workshopMaxEnt/data/bioclim")
-if(!file.exists("../workshopMaxEnt/data/studyarea")) dir.create("../workshopMaxEnt/data/studyarea")
-if(!file.exists("../workshopMaxEnt/output")) dir.create("../workshopMaxEnt/output")
-require(utils)
+#if(!file.exists("/data")) dir.create("../data")
+#if(!file.exists("../data/bioclim")) dir.create("../data/bioclim")
+#if(!file.exists("../data/studyarea")) dir.create("../data/studyarea")
+#if(!file.exists("../output")) dir.create("../output")
+#require(utils)
 # download climate data from worldclim.org
-utils::download.file(url="http://biogeo.ucdavis.edu/data/climate/worldclim/1_4/grid/cur/bio_10m_bil.zip",
-                     destfile=paste0("../workshopMaxEnt/data/bioclim/bio_10m_bil.zip")) 
-utils::unzip("../workshopMaxEnt/data/bioclim/bio_10m_bil.zip",exdir="../workshopMaxEnt/data/bioclim/")
+#utils::download.file(url="http://biogeo.ucdavis.edu/data/climate/worldclim/1_4/grid/cur/bio_10m_bil.zip",
+#                     destfile=paste0("../data/bioclim/bio_10m_bil.zip")) 
+#utils::unzip("../data/bioclim/bio_10m_bil.zip",exdir="../workshopMaxEnt/data/bioclim/")
 
 # This searches for all files that are in the path "data/bioclim/" and 
 # have a file extension of .bil. You can edit this code to reflect the path name 
 # and file extension for your environmental variables
-clim_list <- list.files("../workshopMaxEnt/data/bioclim/",pattern=".bil$",full.names = T) # '..' leads to the path above the folder where the .rmd file is located
+clim_list <- list.files("data/bioclim/",pattern=".bil$",full.names = T) # '..' leads to the path above the folder where the .rmd file is located
 
 # stacking the bioclim variables to process them at one go 
 clim <- raster::stack(clim_list) 
+
+# vizualize data
+plot(clim)
 ```
 
 ###2.2 Occurrence data  
@@ -91,13 +105,13 @@ For our example, we download occurrence data of the nine-banded armadillo from G
 # We provide an if/else statement that checks for occurrence data that have already been downloaded.
 # The goal of this module is to avoid downloading the occurrence data multiple times.
 require(jsonlite)				 
-if(file.exists("../workshopMaxEnt/data/occ_raw")){
-  load("../workshopMaxEnt/data/occ_raw")
+if(file.exists("data/occ_raw_Dasypus1")){
+  load("data/occ_raw_Dasypus1")
 }else{
-  occ_raw <- spocc::occ('Dasypus novemcinctus', 'gbif')
+  occ_raw <- spocc::occ('Dasypus novemcinctus', 'gbif', limit = 2000, has_coords = TRUE)
   occ_raw1 <- occ_raw$gbif$data$Dasypus_novemcinctus
-  save(occ_raw1,file = "../workshopMaxEnt/data/occ_raw")
-  write.csv("../workshopMaxEnt/data/occ_raw.csv")
+  save(occ_raw1,file = "data/occ_raw_Dasypus1")
+  write.csv("data/occ_raw_Dasypus1.csv")
 }
 
 # to view the first few lines of the occurrence dataset
@@ -120,12 +134,32 @@ occ_unique <- occ_clean[!dups,]
 cat(nrow(occ_clean)-nrow(occ_unique), "records are removed")
 ```
 
+
+However, we may want to thin presences because the data seems to spatially biased. We use package' spThin' to further thin the data.
+
+```{r eval=FALSE}
+
+occ_thinned <-
+  thin( loc.data = occ_unique, 
+        lat.col = "latitude", long.col = "longitude", 
+        spec.col = "taxonKey", 
+        thin.par = 10, reps = 1000, 
+        locs.thinned.list.return = TRUE, 
+        write.files = FALSE, 
+        write.log.file = FALSE )
+
+plotThin(occ_thinned)
+str(occ_thinned)
+```
+
+
+
 Up to this point we have been working with a data frame, but it has no spatial relationship with environmental layers. So we need to make the data spatial. Once our data is spatial we can use the *plot* function to see the occurrence data and allow us to check for data points that appear to be erroneous.
 
 #####Thread 8
 ```{r clean_data2}
 # make occ spatial
-coordinates(occ_unique) <- ~ longitude + latitude
+coordinates(occ_thinned) <- ~ longitude + latitude
 ## look for erroneous points
 plot(clim[[1]]) # to the first layer of the bioclim layers as a reference
 plot(occ_unique,add=TRUE) # plot the oc_unique on the above raster layer
@@ -138,6 +172,7 @@ In the figure above, we can see several points that appear outside the known dis
 # remove erroneous points (i.e., only keep good records)
 occ_unique <- occ_unique[which(occ_unique$longitude>-110 &
                                  occ_unique$longitude < -40),]
+str(occ_unique)
 ```
 
 We want to use only one occurrence point per pixel, so we need to thin our occurrence data.
@@ -156,7 +191,11 @@ plot(clim[[1]])
 
 # plot the final occurrence data on the environmental layer
 plot(occ_final,add=T,col="red") # the 'add=T' tells R to put the incoming data on the existing layer
+
+str(occ_final)
 ```
+
+
 
 ###2.3 Set up study area
 We create a buffer around our occurrence locations and define this as our study region, which will allow us to avoid sampling from a broad background. We establish a four-decimal-degree buffer around the occurrence points. To make sure that our buffer encompasses the appropriate area, we plot the occurrence points, the first environmental layer, and the buffer polygon.
@@ -164,7 +203,7 @@ We create a buffer around our occurrence locations and define this as our study 
 #####Thread 11
 ```{r set_up_study_area1}
 # this creates a 4-decimal-degree buffer around the occurrence data 
-occ_buff <- buffer(occ_final,1000000) 
+occ_buff <- buffer(occ_final,800000) 
 plot(occ_buff)
 
 # plot the first element ([[1]]) in the raster stack
@@ -189,7 +228,7 @@ plot(studyArea)
 # save the new study area rasters as ascii
 writeRaster(studyArea,
             # a series of names for output files
-            filename=paste0("../workshopMaxEnt/data/studyarea/",names(studyArea),".asc"), 
+            filename=paste0("data/studyarea/",names(studyArea),".asc"), 
             format="ascii", ## the output format
             bylayer=TRUE, ## this will save a series of layers
             overwrite=T)
@@ -262,6 +301,37 @@ pa <- c(rep(1,nrow(p)), rep(0,nrow(a)))
 pder <- as.data.frame(rbind(p,a)) 
 ```
 
+Before running models, we may want to calculate environmental similarity metrics of our predictor variable extent compared to the reference points.
+
+```{r}
+occs.sim <- similarity(studyArea, p)
+occs.mess <- occs.sim$similarity_min
+
+# This is the MESS plot -- increasingly negative values represent increasingly different # climatic conditions from the reference (our occurrences), while increasingly positive # values are more similar. First, we'll make a SpatialPoints object for our occurrences  for plotting with levelplot() from the rasterVis package (Lamigueiro & Hijmans 2021). This package has great plotting functionality for rasters, and by default bins values for # display when data is continuous.
+
+p.sp <- sp::SpatialPoints(occ_train)
+# Vector data (points, polygons) are added to a levelplot with a "+", like ggplot.
+rasterVis::levelplot(occs.mess, main = "Environmental similarity", margin = FALSE) + 
+  latticeExtra::layer(sp.points(p.sp, col="black"))
+
+```
+
+We define some good colors for representing categorical variables
+This map shows the variable for each grid cell that is most different from the reference
+
+```{r}
+cols <- RColorBrewer::brewer.pal(8, "Set1")
+
+rasterVis::levelplot(occs.sim$mod, col.regions = cols, main = "Most different variable") +   latticeExtra::layer(sp.points(occs.sp, col="black"))
+```
+
+This map shows the variable for each grid cell that is most similar to the reference
+```{r}
+rasterVis::levelplot(occs.sim$mos, col.regions = cols, main = "Most similar variable") + 
+  latticeExtra::layer(sp.points(occs.sp, col="black"))
+```
+
+
 ##3 Maxent models
 ###3.1 Simple implementation
 
@@ -274,7 +344,7 @@ pder <- as.data.frame(rbind(p,a))
 mod <- maxent(x=pder, ## env conditions
               p=pa,   ## 1:presence or 0:absence
 
-              path=paste0("../workshopMaxEnt/output/maxent_outputs"), ## folder for maxent output; 
+              path=paste0("output/maxent_outputs"), ## folder for maxent output; 
               # if we do not specify a folder R will put the results in a temp file, 
               # and it gets messy to read those. . .
               args=c("responsecurves") ## parameter specification
@@ -346,15 +416,15 @@ mod1_autofeature <- maxent(x=pder[c("bio1","bio4","bio11")],
                            ## env conditions, here we selected only 3 predictors
                            p=pa,
                            ## 1:presence or 0:absence
-                           path="../workshopMaxEnt/output/maxent_outputs1_auto",
-                           ## this is the folder you will find manxent output
+                           path="output/maxent_outputs1_auto",
+                           ## this is the folder you will find maxent output
                            args=prepPara(userfeatures=NULL) ) 
                            ## default is autofeature
               
 # or select Linear& Quadratic features
 mod1_lq <- maxent(x=pder[c("bio1","bio4","bio11")],
                   p=pa,
-                  path=paste0("../workshopMaxEnt/output/maxent_outputs1_lq"),
+                  path=paste0("output/maxent_outputs1_lq"),
                   args=prepPara(userfeatures="LQ") ) 
                   ## default is autofeature, here LQ represents Linear& Quadratic
                   ## (L-linear, Q-Quadratic, H-Hinge, P-Product, T-Threshold)
@@ -364,21 +434,24 @@ mod1_lq <- maxent(x=pder[c("bio1","bio4","bio11")],
 
 #####Thread 22
 ```{r beta_multiplier,eval=FALSE}
-#change betamultiplier for all features
+#change betam ultiplier for all features
 mod2 <- maxent(x=pder[c("bio1","bio4","bio11")], 
                p=pa, 
-              path=paste0("../workshopMaxEnt/output/maxent_outputs2_0.5"), 
+              path=paste0("output/maxent_outputs2_0.5"), 
               args=prepPara(userfeatures="LQ",
                             betamultiplier=0.5) ) 
 
 mod2 <- maxent(x=pder[c("bio1","bio4","bio11")], 
                p=pa, 
-              path=paste0("../workshopMaxEnt/output/maxent_outputs2_complex"), 
+              path=paste0("output/maxent_outputs2_complex"), 
               args=prepPara(userfeatures="LQH",
                             ## include L, Q, H features
                             beta_lqp=1.5, 
                             ## use different betamultiplier for different features
                             beta_hinge=0.5 ) ) 
+
+mod_eval_train <- dismo::evaluate(p=p,a=a,model=mod2) 
+
 ```
 
 ###4.3 Specify projection layers
@@ -390,36 +463,36 @@ mod2 <- maxent(x=pder[c("bio1","bio4","bio11")],
 # of the predictor variables; 
 mod3 <- maxent(x=pder[c("bio1","bio11")], 
                p=pa, 
-              path=paste0("../workshopMaxEnt/output/maxent_outputs3_prj1"), 
+              path=paste0("output/maxent_outputs3_prj1"), 
               args=prepPara(userfeatures="LQ",
                             betamultiplier=1,
-                            projectionlayers="C:/Users/viore/Dropbox/Columbia/KIZ/workshop materials/SDM/code/workshopMaxEnt/data/studyarea")) 
+                            projectionlayers="data/studyarea")) 
 
 # load the projected map
-ped <- raster(paste0("../workshopMaxEnt/output/maxent_outputs3_prj1/species_studyarea.asc"))
+ped <- raster(paste0("output/maxent_outputs3_prj1/species_studyarea.asc"))
 plot(ped)
 
 # we can also project on a broader map, but please 
-# caustion about the inaccuracy associated with model extrapolation.
+# caution about the inaccuracy associated with model extrapolation.
 mod3 <- maxent(x=pder[c("bio1","bio11")], 
                p=pa, 
-              path=paste0("../workshopMaxEnt/output/maxent_outputs3_prj2"), 
+              path=paste0("output/maxent_outputs3_prj2"), 
               args=prepPara(userfeatures="LQ",
                             betamultiplier=1,
-                            projectionlayers="C:/Users/viore/Dropbox/Columbia/KIZ/workshop materials/SDM/code/workshopMaxEnt/data/bioclim") ) 
+                            projectionlayers="data/bioclim") ) 
 # plot the map
-ped <- raster(paste0("../workshopMaxEnt/output/maxent_outputs3_prj2/species_bioclim.asc"))
+ped <- raster(paste0("output/maxent_outputs3_prj2/species_bioclim.asc"))
 plot(ped)
 
-# simply check the difference if we used a different betamultiplier
+# simply check the difference if we used a different beta multiplier
 mod3_beta1 <- maxent(x=pder[c("bio1","bio11")], 
                p=pa, 
-              path=paste0("../workshopMaxEnt/output/maxent_outputs3_prj3"), 
+              path=paste0("output/maxent_outputs3_prj3"), 
               args=prepPara(userfeatures="LQ",
                             betamultiplier=100, 
                             ## for an extreme example, set beta as 100
-                            projectionlayers="C:/Users/viore/Dropbox/Columbia/KIZ/workshop materials/SDM/code/workshopMaxEnt/data/bioclim") ) 
-ped3 <- raster(paste0("../workshopMaxEnt/output/maxent_outputs3_prj3/species_bioclim.asc"))
+                            projectionlayers="data/bioclim") ) 
+ped3 <- raster(paste0("output/maxent_outputs3_prj3/species_bioclim.asc"))
 plot(ped-ped3) ## quickly check the difference between the two predictions
 
 ```
@@ -431,21 +504,22 @@ plot(ped-ped3) ## quickly check the difference between the two predictions
 # enable or disable clamping function; note that clamping function is involved when projecting
 mod4_clamp <- maxent(x=pder[c("bio1","bio11")],
                      p=pa,
-                     path=paste0("../workshopMaxEnt/output/maxent_outputs4_clamp"), 
+                     path=paste0("output/maxent_outputs4_clamp"), 
                      args=prepPara(userfeatures="LQ",
                                    betamultiplier=1,
                                    doclamp = TRUE,
-                                  projectionlayers="C:/Users/viore/Dropbox/Columbia/KIZ/workshop materials/SDM/code/workshopMaxEnt/data/bioclim")) 
+                                   projectionlayers="data/bioclim")) 
 
 mod4_noclamp <- maxent(x=pder[c("bio1","bio11")], 
                        p=pa, 
-                       path=paste0("../workshopMaxEnt/output/maxent_outputs4_noclamp"),
+                       path=paste0("output/maxent_outputs4_noclamp"),
                        args=prepPara(userfeatures="LQ",
                                       betamultiplier=1,
-                                      doclamp = FALSE,                                    projectionlayers="C:/Users/viore/Dropbox/Columbia/KIZ/workshop materials/SDM/code/workshopMaxEnt/data/bioclim") ) 
+                                      doclamp = FALSE,
+                                     projectionlayers="data/bioclim")) 
 
-ped_clamp <- raster(paste0("../workshopMaxEnt/output/maxent_outputs4_clamp/species_bioclim.asc") )
-ped_noclamp <- raster(paste0("../workshopMaxEnt/output/maxent_outputs4_noclamp/species_bioclim.asc") )
+ped_clamp <- raster(paste0("output/maxent_outputs4_clamp/species_bioclim.asc") )
+ped_noclamp <- raster(paste0("output/maxent_outputs4_noclamp/species_bioclim.asc") )
 plot(stack(ped_clamp,ped_noclamp))
 plot(ped_clamp - ped_noclamp) 
 ## we may notice small differences, especially clamp shows higher predictions in most areas.
@@ -456,10 +530,11 @@ plot(ped_clamp - ped_noclamp)
 #####Thread 25
 ```{r cross_validation,eval=FALSE}
 mod4_cross <- maxent(x=pder[c("bio1","bio11")], p=pa, 
-                            path=paste0("../workshopMaxEnt/output/maxent_outputs4_cross"), 
+                            path=paste0("output/maxent_outputs4_cross"), 
                             args=prepPara(userfeatures="LQ",
                                           betamultiplier=1,
-                                          doclamp = TRUE, projectionlayers="C:/Users/viore/Dropbox/Columbia/KIZ/workshop materials/SDM/code/workshopMaxEnt/data/bioclim",
+                                          doclamp = TRUE, 
+                                          projectionlayers="data/bioclim",
                                           replicates=5, ## 5 replicates
                                           replicatetype="crossvalidate") )
                                           ##possible values are: crossvalidate,bootstrap,subsample

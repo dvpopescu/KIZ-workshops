@@ -1,0 +1,390 @@
+---
+title: "single-species occupancy"
+author: "excerpt from 'Introduction to spOccupancy' Jeffrey W. Doser, Andrew O. Finley, Marc Kery, Elise F. Zipkin"
+date: "2024-04-02"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_depth: 2
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*Modern Methods in Ecological Modeling, Kunming Institute of Zoology, April 2024*
+
+To get started, we load the `spOccupancy` package, as well as the `coda` package, which we will use for some MCMC summary and diagnostics. We will also use the `stars` and `ggplot2` packages to create some basic plots of our results. We then set a seed so you can reproduce the same results as we do.
+
+```{r setup, message = FALSE, warning = FALSE}
+library(spOccupancy)
+library(coda)
+library(stars)
+library(ggplot2)
+library(tidyverse)
+set.seed(102)
+```
+
+## Example data set: Foliage-gleaning birds at Hubbard Brook
+
+As an example data set throughout this vignette, we will use data from twelve foliage-gleaning bird species collected from point count surveys at Hubbard Brook Experimental Forest (HBEF) in New Hampshire, USA. Specific details on the data set, which is just a small subset from a long-term survey, are available on the [Hubbard Brook website](https://portal.edirepository.org/nis/mapbrowse?scope=knb-lter-hbr&identifier=178) and @doser2022integrated. The data are provided as part of the `spOccupancy` package and are loaded with `data(hbef2015)`. Point count surveys were conducted at 373 sites over three replicates, each of 10 minutes in length and with a detection radius of 100m. In the data set provided here, we converted these data to detection-nondetection data. Some sites were not visited for all three replicates. Additional information on the data set (including individual species in the data set) can be viewed in the man page using `help(hbef2015)`. 
+
+```{r}
+data(hbef2015) # Load the data set.
+str(hbef2015) # Get an overview of what's in the data.
+```
+
+Thus, the object `hbef2015` is a list comprised of the detection-nondetection data (`y`), covariates on the occurrence portion of the model (`occ.covs`), covariates on the detection portion of the model (`det.covs`), and the spatial coordinates of each site (`coords`) for use in spatial occupancy models and in plotting. This list is in the exact format required for input to `spOccupancy` model functions. `hbef2015` contains data on 12 species in the three-dimensional array `y`, where the dimensions of `y` correspond to species (12), sites (373), and replicates (3). For single-species occupancy models in Section 2 and 3, we will only use data on the charming Ovenbird (OVEN; *Seiurus aurocapilla*), so we next subset the `hbef2015` list to only include data from OVEN in a new object `ovenHBEF`. 
+
+```{r}
+sp.names <- dimnames(hbef2015$y)[[1]]
+ovenHBEF <- hbef2015
+ovenHBEF$y <- ovenHBEF$y[sp.names == "OVEN", , ]
+table(ovenHBEF$y) # Quick summary.
+```
+
+We see that OVEN is detected at a little over half of all site-replicate combinations.
+
+
+# Single-species occupancy models
+
+## Basic model description
+
+Let $z_j$ be the true presence (1) or absence (0) of a species at site $j$, with $j = 1, \dots, J$. For our OVEN example, $J = 373$. Following the basic occupancy model [@mackenzie2002; @tyre2003improving], we assume this latent occurrence variable arises from a Bernoulli process following
+
+\begin{equation}
+\begin{split}
+&z_j \sim \text{Bernoulli}(\psi_j), \\
+&\text{logit}(\psi_j) = \bm{x}^{\top}_j\bm{\beta},
+\end{split}
+\end{equation}
+
+where $\psi_j$ is the probability of occurrence at site $j$, which is a function of site-specific covariates $\bm{X}$ and a vector of regression coefficients ($\bm{\beta}$).
+
+We do not directly observe $z_j$, but rather we observe an imperfect representation of the latent occurrence process as a result of imperfect detection (i.e., the failure to detect a species at a site when it is truly present). Let $y_{j, k}$ be the observed detection (1) or nondetection (0) of a species of interest at site $j$ during replicate $k$ for each of $k = 1, \dots, K_j$ replicates. Note that the number of replicates, $K_j$, can vary by site and in practical applications will often be equal to 1 for a subset of sites (i.e., some sites will have no replicate surveys). For our OVEN example, the maximum value of $K_j$ is three. We envision the detection-nondetection data as arising from a Bernoulli process conditional on the true latent occurrence process:
+
+\begin{equation}
+\begin{split}
+&y_{j, k} \sim \text{Bernoulli}(p_{j, k}z_j), \\
+&\text{logit}(p_{j, k}) = \bm{v}^{\top}_{j, k}\bm{\alpha},
+\end{split}
+\end{equation}
+
+where $p_{j, k}$ is the probability of detecting a species at site $j$ during replicate $k$ (given it is present at site $j$), which is a function of site and replicate specific covariates $\bm{V}$ and a vector of regression coefficients ($\bm{\alpha}$).
+
+To complete the Bayesian specification of the model, we assign multivariate normal priors for the occurrence ($\bm{\beta}$) and detection ($\bm{\alpha}$) regression coefficients. To yield an efficient implementation of the occupancy model using a logit link function, we use P&oacute;lya-Gamma data augmentation [@polson2013], which is described in depth in a separate [MCMC sampler vignette](https://www.jeffdoser.com/files/spoccupancy-web/articles/mcmcSamplers.pdf). 
+
+## Fitting single-species occupancy models with `PGOcc()`
+
+The `PGOcc()` function fits single-species occupancy models using P&oacute;lya-Gamma latent variables, which makes it more efficient than standard Bayesian implementations of occupancy models using a logit link function [@polson2013; @clark2019]. `PGOcc()` has the following arguments: 
+
+```{r, eval = FALSE}
+PGOcc(occ.formula, det.formula, data, inits, priors, n.samples, 
+      n.omp.threads = 1, verbose = TRUE, n.report = 100, 
+      n.burn = round(.10 * n.samples), n.thin = 1, n.chains = 1,
+      k.fold, k.fold.threads = 1, k.fold.seed, k.fold.only = FALSE, ...)
+```
+
+The first two arguments, `occ.formula` and `det.formula`, use standard R model syntax to denote the covariates to be included in the occurrence and detection portions of the model, respectively. Only the right hand side of the formulas are included. Random intercepts can be included in both the occurrence and detection portions of the single-species occupancy model using `lme4` syntax [@bates2015]. For example, to include a random intercept for different observers in the detection portion of the model, we would include `(1 | observer)` in the `det.formula`, where `observer` indicates the specific observer for each data point. The names of variables given in the formulas should correspond to those found in `data`, which is a list consisting of the following tags: `y` (detection-nondetection data), `occ.covs` (occurrence covariates), `det.covs` (detection covariates). `y` should be stored as a sites x replicate matrix, `occ.covs` as a matrix or data frame with site-specific covariate values, and `det.covs` as a list with each list element corresponding to a covariate to include in the detection portion of the model. Covariates on detection can vary by site and/or survey, and so these covariates may be specified as a site by survey matrix for survey-level covariates or as a one-dimensional vector for survey level covariates. The `ovenHBEF` list is already in the required format. Here we will model OVEN occurrence as a function of linear and quadratic elevation and will include three observational covariates (linear and quadratic day of survey, time of day of survey) on the detection portion of the model. We standardize all covariates by using the `scale()` function in our model specification, and use the `I()` function to specify quadratic effects:
+
+```{r}
+oven.occ.formula <- ~ scale(Elevation) + I(scale(Elevation)^2)
+oven.det.formula <- ~ scale(day) + scale(tod) + I(scale(day)^2)
+# Check out the format of ovenHBEF
+str(ovenHBEF)
+```
+
+Next, we specify the initial values for the MCMC sampler in `inits`. `PGOcc()` (and all other `spOccupancy` model fitting functions) will set initial values by default, but here we will do this explicitly, since in more complicated cases setting initial values close to the presumed solutions can be vital for success of an MCMC-based analysis. For all models described in this vignette (in particular the non-spatial models), choice of the initial values is largely inconsequential, with the exception being that specifying initial values close to the presumed solutions can decrease the amount of samples you need to run to arrive at convergence of the MCMC chains. Thus, when first running a model in `spOccupancy`, we recommend fitting the model using the default initial values that `spOccupancy` provides, which are based on the prior distributions. After running the model for a reasonable period, if you find the chains are taking a long time to reach convergence, you then may wish to set the initial values to the mean estimates of the parameters from the initial model fit, as this will likely help reduce the amount of time you need to run the model.
+
+The default initial values for occurrence and detection regression coefficients (including the intercepts) are random values from the prior distributions adopted in the model, while the default initial values for the latent occurrence effects are set to 1 if the species was observed at a site and 0 otherwise. Initial values are specified in a list with the following tags: `z` (latent occurrence values), `alpha` (detection intercept and regression coefficients), and `beta` (occurrence intercept and regression coefficients). Below we set all initial values of the regression coefficients to 0, and set initial values for `z` based on the detection-nondetection data matrix. For the occurrence (`beta`) and detection (`alpha`) regression coefficients, the initial values are passed either as a vector of length equal to the number of estimated parameters (including an intercept, and in the order specified in the model formula), or as a single value if setting the same initial value for all parameters (including the intercept). Below we take the latter approach. To specify the initial values for the latent occurrence at each site (`z`), we must ensure we set the value to 1 at all sites where OVEN was detected at least once, because if we detect OVEN at a site then the value of `z` is 1 with complete certainty (under the assumption of the model that there are no false positives). If the initial value for `z` is set to 0 at one or more sites when the species was detected, the occupancy model will fail. `spOccupancy` will provide a clear error message if the supplied initial values for `z` are invalid. Below we use the raw detection-nondetection data and the `apply()` function to set the initial values to 1 if OVEN was detected at that site and 0 otherwise. 
+
+```{r}
+# Format with explicit specification of inits for alpha and beta
+# with four detection parameters and three occurrence parameters 
+# (including the intercept).
+oven.inits <- list(alpha = c(0, 0, 0, 0), 
+                   beta = c(0, 0, 0), 
+                   z = apply(ovenHBEF$y, 1, max, na.rm = TRUE))
+# Format with abbreviated specification of inits for alpha and beta.
+oven.inits <- list(alpha = 0, 
+                   beta = 0, 
+                   z = apply(ovenHBEF$y, 1, max, na.rm = TRUE))
+```
+
+We next specify the priors for the occurrence and detection regression coefficients. The P&oacute;lya-Gamma data augmentation algorithm employed by `spOccupancy` assumes normal priors for both the detection and occurrence regression coefficients. These priors are specified in a list with tags `beta.normal` for occurrence and `alpha.normal` for detection parameters (including intercepts). Each list element is then itself a list, with the first element of the list consisting of the hypermeans for each coefficient and the second element of the list consisting of the hypervariances for each coefficient. Alternatively, the hypermean and hypervariances can be specified as a single value if the same prior is used for all regression coefficients. By default, `spOccupancy` will set the hypermeans to 0 and the hypervariances to 2.72, which corresponds to a relatively flat prior on the probability scale (0, 1; @lunn2013bugs). @broms2016model, @northrup2018comment, and others show such priors are an adequate choice when the goal is to specify relatively non-informative priors. We will use these default priors here, but we specify them explicitly below for clarity 
+
+```{r, tidy = FALSE}
+oven.priors <- list(alpha.normal = list(mean = 0, var = 2.72), 
+                    beta.normal = list(mean = 0, var = 2.72))
+```
+
+Our last step is to specify the number of samples to produce with the MCMC algorithm (`n.samples`), the length of burn-in (`n.burn`), the rate at which we want to thin the posterior samples (`n.thin`), and the number of MCMC chains to run (`n.chains`). Note that currently `spOccupancy` runs multiple chains sequentially and does not allow chains to be run simultaneously in parallel across multiple threads. Instead, we allow for within-chain parallelization using the `n.omp.threads` argument. We can set `n.omp.threads` to a number greater than 1 and smaller than the number of threads on the computer you are using. Generally, setting `n.omp.threads > 1` will not result in decreased run times for non-spatial models in `spOccupancy`, but can substantially decrease run time when fitting spatial models [@finley2020spnngp]. Here we set `n.omp.threads = 1`. 
+
+For a simple single-species occupancy model, we shouldn't need too many samples and will only need a small amount of burn-in and thinning. We will run the model using three chains to assess convergence using the Gelman-Rubin diagnostic (Rhat; @brooks1998). 
+
+```{r}
+n.samples <- 5000
+n.burn <- 3000
+n.thin <- 2
+n.chains <- 3
+```
+
+We are now nearly set to run the occupancy model. The `verbose` argument is a logical value indicating whether or not MCMC sampler progress is reported to the screen. If `verbose = TRUE`, sampler progress is reported after every multiple of the specified number of iterations in the `n.report` argument. We set `verbose = TRUE` and `n.report = 1000` to report progress after every 1000th MCMC iteration. The last four arguments to `PGOcc()` (`k.fold`, `k.fold.threads`, `k.fold.seed`, `k.fold.only`) are used for performing k-fold cross-validation for model assessment, which we will illustrate in a subsequent section. For now, we won't specify the arguments, which will tell `PGOcc()` not to perform k-fold cross-validation. 
+
+```{r}
+out <- PGOcc(occ.formula = oven.occ.formula, 
+             det.formula = oven.det.formula, 
+             data = ovenHBEF, 
+             inits = oven.inits, 
+             n.samples = n.samples, 
+             priors = oven.priors, 
+             n.omp.threads = 1, 
+             verbose = TRUE, 
+             n.report = 1000, 
+             n.burn = n.burn, 
+             n.thin = n.thin, 
+             n.chains = n.chains)
+```
+
+```{r}
+names(out) # Look at the contents of the resulting object.
+```
+
+`PGOcc()` returns a list of class `PGOcc` with a suite of different objects, many of them being `coda::mcmc` objects of posterior samples. Note the "Preparing to run the model" printed section doesn't have any information shown in it. `spOccupancy` model fitting functions will present messages when preparing the data for the model in this section, or will print out the default priors or initial values used when they are not specified in the function call. Here we specified everything explicitly so no information was reported. 
+
+For a concise yet informative summary of the regression parameters and convergence of the MCMC chains, we can use `summary()` on the resulting `PGOcc()` object. 
+
+```{r}
+summary(out)
+```
+
+Note that all coefficients are printed on the logit scale. We see OVEN is fairly widespread (at the scale of the survey) in the forest given the large intercept value, which translates to a value of 0.89 on the probability scale (run `plogis(2.13)`). In addition, the negative linear and quadratic terms for `Elevation` suggest occurrence probability peaks at mid-elevations. On average, detection probability is about 0.69.
+
+In principle, before we even look at the parameter summaries, we ought to ensure that the MCMC chains have reached convergence. The `summary` function also returns the Gelman-Rubin diagnostic [@brooks1998] and the effective samples size (ESS) of the posterior samples, which we can use to assess convergence. Here we see all Rhat values are less than 1.1 and the ESS values indicate adequate mixing of the MCMC chains. Additionally, we can use the `plot()` function to plot traceplots of the individual model parameters that are contained in the resulting `PGOcc` object. The `plot()` function takes three arguments: `x` (the model object), `param` (a character string denoting the parameter name), and `density` (logical value indicating whether to also plot the density of MCMC samples along with the traceplot). See `?plot.PGOcc` for more details (similar functions exist for all `spOccupancy` model objects).  
+
+```{r, fig.width = 5, fig.height = 5, fig.align = 'center', units = 'in'}
+plot(out, 'beta', density = FALSE) # Occupancy parameters.
+```
+```{r, fig.width = 5, fig.height = 5, fig.align = 'center', units = 'in'}
+plot(out, 'alpha', density = FALSE) # Detection parameters.
+```
+
+## Posterior predictive checks
+
+The function `ppcOcc()` performs a posterior predictive check on all `spOccupancy` model objects as a Goodness of Fit (GoF) assessment. The fundamental idea of GoF testing is that a good model should generate data that closely align with the observed data. If there are drastic differences in the true data from the model generated data, our model is likely not very useful [@hobbs2015]. GoF assessments are more complicated using binary data, like detection-nondetection used in occupancy models, as standard approaches are not valid assessments for the raw data in binary response models such as occupancy models [@broms2016model; @mccullagh2019generalized]. Thus, any approach to assess model fit for detection-nondetection data must bin, or aggregate, the raw values in some manner, and then perform a model fit assessment on the binned values. There are numerous ways we could envision binning the raw detection-nondetection values [@mackenzie2004assessing; @kery2015applied]. In `spOccupancy`, a posterior predictive check broadly takes the following steps:
+
+1. Fit the model using any of the model-fitting functions (here `PGOcc()`), which generates replicated values for all detection-nondetection data points.
+2. Bin both the actual and the replicated detection-nondetection data in a suitable manner, such as by site or replicate [@mackenzie2004assessing].
+3. Compute a fit statistic on both the actual data and also on the model-generated 'replicate data'.
+4. Compare the fit statistics for the true data and replicate data. If they are widely different, this suggests a lack of fit of the model to the actual data set at hand. 
+
+To perform a posterior predictive check, we send the resulting `PGOcc` model object as input to the `ppcOcc()` function, along with a fit statistic (`fit.stat`) and a numeric value indicating how to group, or bin, the data (`group`). Currently supported fit statistics include the Freeman-Tukey statistic and the Chi-Squared statistic (`freeman-tukey` or `chi-squared`, respectively, @kery2015applied). Currently, `ppcOcc()` allows the user to group the data by row (site; `group = 1`) or column (replicate; `group = 2`). `ppcOcc()` will then return a set of posterior samples for the fit statistic (or discrepancy measure) using the actual data (`fit.y`) and model generated replicate data set (`fit.y.rep`), summed across all data points in the chosen manner. We generally recommend performing a posterior predictive check when grouping data both across sites (`group = 1`) as well as across replicates (`group = 2`), as they may reveal (or fail to reveal) different inadequacies of the model for the specific data set at hand [@kery2015applied]. In particular, binning the data across sites (`group = 1`) may help reveal whether the model fails to adequately represent variation in occurrence and detection probability across space, while binning the data across replicates (`group = 2`) may help reveal whether the model fails to adequately represent variation in detection probability across the different replicate surveys. Similarly, we suggest exploring posterior predictive checks using both the Freeman-Tukey Statistic as well as the Chi-Squared statistic. Generally, the more ways we explore the fit of our model to the data, the more confidence we have that our model is adequately representing the data and we can draw reasonable conclusions from it. By performing posterior predictive checks with the two fit statistics and two ways of grouping the data, `spOccupancy` provides us with four different measures that we can use to assess the validity of our model. Throughout this vignette, we will display different types of posterior predictive checks using different combinations of the fit statistic and grouping approach. In a more complete analysis, we would run all four types of posterior predictive checks for each model we fit as a more complete GoF assessment. 
+
+The resulting values from a call to `ppcOcc()` can be used with the `summary()` function to generate a Bayesian p-value, which is the probability, under the fitted model, to obtain a value of the fit statistic that is more extreme (i.e., larger) than the one observed, i.e., for the actual data. Bayesian p-values are sensitive to individual values, so we should also explore the discrepancy measures for each "grouped" data point. `ppcOcc()` returns a matrix of posterior quantiles for the fit statistic for both the observed (`fit.y.group.quants`) and model generated, replicate data (`fit.y.rep.group.quants`) for each "grouped" data point. 
+
+We next perform a posterior predictive check using the Freeman-Tukey statistic grouping the data by sites. We summarize the posterior predictive check with the `summary()` function, which reports a Bayesian p-value. A Bayesian p-value that hovers around 0.5 indicates adequate model fit, while values less than 0.1 or greater than 0.9 suggest our model does not fit the data well [@hobbs2015]. As always with a simulation-based analysis using MCMC, you will get numerically slightly different values. 
+
+```{r}
+ppc.out <- ppcOcc(out, fit.stat = 'freeman-tukey', group = 1)
+summary(ppc.out)
+```
+
+The Bayesian p-value is the proportion of posterior samples of the fit statistic of the model generated data that are greater than the corresponding fit statistic of the true data, summed across all "grouped" data points. We can create a visual representation of the Bayesian p-value as follows [@kery2015applied]: 
+
+```{r, fig.width = 5, fig.height = 5, fig.align = 'center', units = 'in'}
+ppc.df <- data.frame(fit = ppc.out$fit.y, 
+                     fit.rep = ppc.out$fit.y.rep, 
+                     color = 'lightskyblue1')
+ppc.df$color[ppc.df$fit.rep > ppc.df$fit] <- 'lightsalmon'
+plot(ppc.df$fit, ppc.df$fit.rep, bg = ppc.df$color, pch = 21, 
+     ylab = 'Fit', xlab = 'True')
+lines(ppc.df$fit, ppc.df$fit, col = 'black')
+```
+
+Our Bayesian p-value is greater than 0.1 indicating no lack of fit, although the above plot shows most of the fit statistics are smaller for the replicate data than the actual data set. Relying solely on the Bayesian p-value as an assessment of model fit is not always a great option, as individual data points can have an overbearing influence on the resulting summary value. Instead of summing across all data points for a single discrepancy measure, `ppcOcc()` also allows us to explore discrepancy measures on a "grouped" point by point basis. The resulting `ppcOcc` object will contain the objects `fit.y.group.quants` and `fit.y.rep.group.quants`, which contain quantiles of the posterior distributions for the discrepancy measures of each grouped data point. Below we plot the difference in the discrepancy measure between the replicate and actual data across each of the sites. 
+
+```{r, fig.width = 5, fig.height = 5, fig.align = 'center', units = 'in'}
+diff.fit <- ppc.out$fit.y.rep.group.quants[3, ] - ppc.out$fit.y.group.quants[3, ]
+plot(diff.fit, pch = 19, xlab = 'Site ID', ylab = 'Replicate - True Discrepancy')
+```
+
+We see there are four sites that contribute to the overall GoF measure far more than in proportion to their number, i.e., whose discrepancy measure for the actual data is much larger than the corresponding discrepancy for the replicate data. Here we will ignore this, but in a real analysis it might be very insightful to further explore these sites to see what could explain this pattern (e.g., are the sites close together in space? Could the data be the result of erroneous recording, or of extraordinary local habitat that is not adequately described by the occurrence covariates?). Although rarely done, closer investigations of outlying values in statistical analyses may sometimes teach one more than mere acceptance of a fitting model. 
+
+## Model selection using WAIC and k-fold cross-validation {#kFold}
+
+Posterior predictive checks allow us to assess how well our model fits the data, but they are not very useful if we want to compare multiple competing models and ultimately select a final model based on some criterion. Bayesian model selection is very much a constantly changing field. See @hooten2015guide for an accessible overview of Bayesian model selection for ecologists. 
+
+For Bayesian hierarchical models like occupancy models, the most common Bayesian model selection criterion, the deviance information criterion or DIC, is not applicable [@hooten2015guide]. Instead, the Widely Applicable Information Criterion [@watanabe2010] is recommended to compare a set of models and select the best-performing model for final analysis. 
+
+The WAIC is calculated for all `spOccupancy` model objects using the function `waicOcc()`. We calculate the WAIC as 
+
+$$
+\text{WAIC} = -2 \times (\text{elpd} - \text{pD}), 
+$$
+
+where elpd is the expected log point-wise predictive density and PD is the effective number of parameters. We calculate elpd by calculating the likelihood for each posterior sample, taking the mean of these likelihood values, taking the log of the mean of the likelihood values, and summing these values across all sites. We calculate the effective number of parameters by calculating the variance of the log likelihood for each site taken over all posterior samples, and then summing these values across all sites. See Appendix S1 from @broms2016model for more details. 
+
+We calculate the WAIC using `waicOcc()` for our OVEN model below (as always, note some slight differences with your solutions due to Monte Carlo error).
+
+```{r}
+waicOcc(out)
+```
+
+For illustration, let's next rerun the OVEN model, but this time we assume occurrence is constant across the HBEF, and subsequently compare the WAIC value to the full model
+
+```{r}
+out.small <- PGOcc(occ.formula = ~ 1, 
+                   det.formula = oven.det.formula, 
+                   data = ovenHBEF, 
+                   inits = oven.inits, 
+                   n.samples = n.samples, 
+                   priors = oven.priors, 
+                   n.omp.threads = 1, 
+                   verbose = FALSE, 
+                   n.burn = n.burn, 
+                   n.thin = n.thin, 
+                   n.chains = n.chains)
+waicOcc(out.small)
+```
+
+Smaller values of WAIC indicate models with better performance. We see the WAIC for the model with elevation is smaller than the intercept-only model, indicating elevation is an important predictor for OVEN occurrence in HBEF.
+
+When focusing primarily on predictive performance, a k-fold cross-validation (CV) approach is another attractive, though computationally more intensive, alternative to compare a series of models, especially since WAIC may not always be reliable for occupancy models [@broms2016model]. In `spOccupancy`, k-fold cross-validation is accomplished using the arguments `k.fold`, `k.fold.threads`, and `k.fold.seed` in the model fitting function. A k-fold cross validation approach requires fitting a model $k$ times, where each time the model is fit using $J / k$ data points, where $J$ is the total number of sites surveyed at least once in the data set. Each time the model is fit, it uses a different portion of the data and then predicts the remaining $J - J/k$ hold out values. Because the data are not used to fit the model, CV yields true samples from the posterior predictive distribution that we can use to assess the predictive capacity of the model. 
+
+As a measure of out-of-sample predictive performance, we use the deviance as a scoring rule following @hooten2015guide. For K-fold cross-validation, it is computed as 
+
+\begin{equation}
+-2 \sum_{k = 1}^K \text{log}\Bigg(\frac{\sum_{q = 1}^Q \text{Bernoulli}(\bm{y}_k \mid \bm{p}^{(q)}\bm{z}_k^{(q)})}{Q}\Bigg), 
+\end{equation}
+
+where $\bm{p}^{(q)}$ and $\bm{z}_k^{(q)}$ are MCMC samples of detection probability and latent occurrence, respectively, arising from a model that is fit without the observations $\bm{y}_k$, and $Q$ is the total number of posterior samples produced from the MCMC sampler. The -2 is used so that smaller values indicate better model fit, which aligns with most information criteria used for model assessment (like the WAIC implemented using `waicOcc()`). 
+
+The three arguments in `PGOcc()` (`k.fold`, `k.fold.threads`, `k.fold.seed`) control whether or not k-fold cross validation is performed following the complete fit of the model using the entire data set. The `k.fold` argument indicates the number of $k$ folds to use for cross-validation. If `k.fold` is not specified, cross-validation is not performed and `k.fold.threads` and `k.fold.seed` are ignored. The `k.fold.threads` argument indicates the number of threads to use for running the $k$ models in parallel across multiple threads. Parallel processing is accomplished using the R packages `foreach` and `doParallel`. Specifying `k.fold.threads > 1` can substantially decrease run time since it allows for models to be fit simultaneously on different threads rather than sequentially. The `k.fold.seed` indicates the seed used to randomly split the data into $k$ groups. This is by default set to 100. Lastly, the `k.fold.only` argument controls whether the full model is run prior to performing cross-validation (`k.fold.only = FALSE`, the default). If set to `TRUE`, only k-fold cross-validation will be performed. This can be useful when performing cross-validation after doing some initial exploration with fitting different models with the full data set so that you don't have to rerun the full model again.   
+
+Below we refit the occupancy model with elevation (linear and quadratic) as an occurrence predictor this time performing 4-fold cross-validation. We set `k.fold = 4` to perform 4-fold cross-validation and `k.fold.threads = 1` to run the model using 1 thread. Normally we would set `k.fold.threads = 4`, but using multiple threads leads to complications when compiling this vignette, so we leave that to you to explore the computational improvements of performing cross-validation across multiple cores. 
+
+```{r}
+out.k.fold <- PGOcc(occ.formula = oven.occ.formula, 
+                    det.formula = oven.det.formula, 
+                    data = ovenHBEF, 
+                    inits = oven.inits, 
+                    n.samples = n.samples, 
+                    priors = oven.priors, 
+                    n.omp.threads = 1, 
+                    verbose = TRUE, 
+                    n.report = 1000, 
+                    n.burn = n.burn, 
+                    n.thin = n.thin, 
+                    n.chains = n.chains,
+                    k.fold = 4, 
+                    k.fold.threads = 1)
+```
+
+We subsequently refit the intercept only occupancy model, and compare the deviance metrics from the 4-fold cross-validation. 
+
+```{r}
+# Model fitting information is suppressed for space.
+out.int.k.fold <- PGOcc(occ.formula = ~ 1,
+                        det.formula = oven.det.formula, 
+                        data = ovenHBEF,
+                        inits = oven.inits,
+                        n.samples = n.samples, 
+                        priors = oven.priors, 
+                        n.omp.threads = 1, 
+                        verbose = FALSE, 
+                        n.report = 1000, 
+                        n.burn = n.burn, 
+                        n.thin = n.thin, 
+                        n.chains = n.chains,
+                        k.fold = 4, 
+                        k.fold.threads = 1)
+```
+
+The cross-validation metric (model deviance) is stored in the `k.fold.deviance` tag of the resulting model object.
+
+```{r}
+out.k.fold$k.fold.deviance # Larger model. 
+out.int.k.fold$k.fold.deviance # Intercept-only model.
+```
+
+Similar to the results from the WAIC, CV also suggests that the model including elevation with a predictor outperforms the intercept only model. 
+
+## Prediction
+
+All model objects resulting from a call to `spOccupancy` model-fitting functions can be used with `predict()` to generate a series of posterior predictive samples at new locations, given the values of all covariates used in the model fitting process. The object `hbefElev` (which comes as part of the `spOccupancy` package) contains elevation data at a 30x30m resolution from the National Elevation Data set across the entire HBEF. We load the data below
+
+```{r}
+data(hbefElev)
+str(hbefElev)
+```
+
+The column `val` contains the elevation values, while `Easting` and `Northing` contain the spatial coordinates that we will use for plotting. We can obtain posterior predictive samples for the occurrence probabilities at these sites by using the `predict()` function and our `PGOcc` fitted model object. Given that we standardized the elevation values when we fit the model, we need to standardize the elevation values for prediction using the exact same values of the mean and standard deviation of the elevation values used to fit the data. 
+
+```{r}
+elev.pred <- (hbefElev$val - mean(ovenHBEF$occ.covs[, 1])) / sd(ovenHBEF$occ.covs[, 1])
+# These are the new intercept and covariate data.
+X.0 <- cbind(1, elev.pred, elev.pred^2) 
+out.pred <- predict(out, X.0)
+```
+
+For `PGOcc` objects, the `predict` function takes two arguments: (1) the `PGOcc` fitted model object; and (2) a matrix or data frame consisting of the design matrix for the prediction locations (which must include and intercept if our model contained one). The resulting object consists of posterior predictive samples for the latent occurrence probabilities (`psi.0.samples`) and latent occurrence values (`z.0.samples`). The beauty of the Bayesian paradigm, and the MCMC computing machinery, is that these predictions all have fully propagated uncertainty. We can use these values to create plots of the predicted mean occurrence values, as well as of their standard deviation as a measure of the uncertainty in these predictions akin to a standard error associated with maximum likelihood estimates. We could also produce a map for the Bayesian credible interval length as an alternative measure of prediction uncertainty or two maps, one showing the lower and the other the upper limit of, say, a 95% credible interval.
+
+```{r, warning = FALSE, message = FALSE, fig.height = 4, fig.width = 7, fig.align = 'center', units = 'in'}
+plot.dat <- data.frame(x = hbefElev$Easting, 
+                       y = hbefElev$Northing, 
+                       mean.psi = apply(out.pred$psi.0.samples, 2, mean), 
+                       sd.psi = apply(out.pred$psi.0.samples, 2, sd), 
+                       stringsAsFactors = FALSE)
+# Make a species distribution map showing the point estimates,
+# or predictions (posterior means)
+dat.stars <- st_as_stars(plot.dat, dims = c('x', 'y'))
+ggplot() + 
+  geom_stars(data = dat.stars, aes(x = x, y = y, fill = mean.psi)) +
+  scale_fill_viridis_c(na.value = 'transparent') +
+  labs(x = 'Easting', y = 'Northing', fill = '', 
+       title = 'Mean OVEN occurrence probability') +
+  theme_bw()
+# Map of the associated uncertainty of these predictions
+# (i.e., posterior sds)
+ggplot() + 
+  geom_stars(data = dat.stars, aes(x = x, y = y, fill = sd.psi)) +
+  scale_fill_viridis_c(na.value = 'transparent') +
+  labs(x = 'Easting', y = 'Northing', fill = '', 
+       title = 'SD OVEN occurrence probability') +
+  theme_bw()
+```
+
+Plots of occupancy vs predictor variables
+
+```{r}
+elev.pred1 <- seq(min(scale(ovenHBEF$occ.covs[, 1])), 
+                  max(scale(ovenHBEF$occ.covs[, 1])), 0.1)
+X.1 <- cbind(1, elev.pred1, elev.pred1^2) 
+out.pred1 <- predict(out, X.1)
+
+str(out.pred1)
+
+plot.dat1 <- data.frame(elev.pred1, 
+                       mean.psi = apply(out.pred1$psi.0.samples, 2, mean), 
+                       upper.psi = apply(out.pred1$psi.0.samples, 2, 
+                                         function(x) quantile(x, probs = 0.975)),
+                       lower.psi = apply(out.pred1$psi.0.samples, 2, 
+                                         function(x) quantile(x, probs = 0.025)),
+                       stringsAsFactors = FALSE)
+
+ggplot(data=plot.dat1, aes(x=elev.pred1, y=mean.psi)) + 
+  geom_line() + 
+  geom_ribbon(aes(ymin=plot.dat1$lower.psi, ymax=plot.dat1$upper.psi), linetype=2, alpha=0.1) +
+  labs(title="OVEN occupancy probability by Elevation",
+        x ="Elevation (scaled)", y = "Occupancy probability")
+  
+```
+
+
+
+

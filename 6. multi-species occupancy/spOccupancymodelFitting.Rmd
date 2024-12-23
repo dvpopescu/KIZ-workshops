@@ -574,6 +574,8 @@ ggplot() +
 
 Comparing this to the non-spatial occupancy model, the spatial model appears to identify areas in HBEF with low OVEN occurrence that are not captured in the non-spatial model. We will resist trying to hypothesize what environmental factors could lead to these patterns. 
 
+
+
 # Multi-species occupancy models
 
 ## Basic model description
@@ -731,7 +733,43 @@ elev.pred <- (hbefElev$val - mean(ovenHBEF$occ.covs[, 1])) / sd(ovenHBEF$occ.cov
 X.0 <- cbind(1, elev.pred, elev.pred^2)
 # Approx. run time: 100 sec
 out.ms.pred <- predict(out.ms, X.0)
+
+str(out.ms.pred)
 ```
+
+Plot maps for each species. The species is specified in the *plot.dat* objecto below by changing the number between the 2 commas --> out.ms.pred$psi.0.samples[,**1**,], where 1 is the first species in our dataset, 2 is the second, 3 is the third etc... all the way to 12. The order of the species in the dataset is: AMRE, BAWW, BHVI, BLBW, BLPW, BTBW, BTNW, CAWA, MAWA, NAWA, OVEN, REVI
+
+```{r}
+sp.names <- dimnames(hbef2015$y)[[1]]
+```
+
+```{r}
+plot.dat <- data.frame(x = hbefElev$Easting, 
+                       y = hbefElev$Northing, 
+                       mean.psi = apply(out.ms.pred$psi.0.samples[,3,], 2, mean), 
+                       sd.psi = apply(out.ms.pred$psi.0.samples[,3,], 2, sd), 
+                       stringsAsFactors = FALSE)
+
+# Make a species distribution map showing the point estimates,
+# or predictions (posterior means)
+dat.stars <- st_as_stars(plot.dat, dims = c('x', 'y'))
+ggplot() + 
+  geom_stars(data = dat.stars, aes(x = x, y = y, fill = mean.psi)) +
+  scale_fill_viridis_c(na.value = 'transparent') +
+  labs(x = 'Easting', y = 'Northing', fill = '', 
+       title = paste("Mean", sp.names[3], "occurrence probability")) +
+  theme_bw()
+  
+# Map of the associated uncertainty of these predictions
+# (i.e., posterior sds)
+ggplot() + 
+  geom_stars(data = dat.stars, aes(x = x, y = y, fill = sd.psi)) +
+  scale_fill_viridis_c(na.value = 'transparent') +
+  labs(x = 'Easting', y = 'Northing', fill = '', 
+       title = paste("SD", sp.names[3], "occurrence probability")) +
+  theme_bw()
+```
+
 
 # Multi-species spatial occupancy models
 
@@ -754,6 +792,7 @@ where the species-specific regression coefficients $\bm{\beta}_i$ follow the com
 We define $\bm{\Sigma}_i(\bm{s}, \bm{s}', \bm{\theta}_i)$ as a $J \times J$ covariance matrix that is a function of the distances between any pair of site coordinates $\bm{s}$ and $\bm{s}'$ and a set of parameters $(\bm{\theta}_i)$ that govern the spatial process. The vector $\bm{\theta}_i$ is equal to $\bm{\theta}_i = \{\sigma^2_i, \phi_i, \nu_i\}$, where $\sigma^2_i$ is a spatial variance parameter for species $i$, $\phi_i$ is a spatial decay parameter for species $i$, and $\nu_i$ is a spatial smoothness parameter for species $i$, where as before, $\nu_i$ is only specified when using a Matern correlation function.
 
 The detection portion of the multi-species spatial occupancy model remains unchanged from the non-spatial multi-species occupancy model. We fit the model again using P&oacute;lya-Gamma data augmentation to enable an efficient Gibbs sampler (see MCMC sampler vignette for details). Similar to our discussion on the single-species spatial occupancy model, we also allow for specification of the spatial process using an NNGP instead of a full GP. This leads to even larger computational gains over the full GP than in the case of a single-species model, given that a separate covariance matrix is specified for each species in the model. See @datta2016hierarchical, @finley2020spnngp, and the MCMC sampler vignette for additional details on NNGPs and their implementation in multi-species spatial occupancy models. 
+
 
 ## Fitting multi-species spatial occupancy models with `spMsPGOcc()`
 
@@ -893,6 +932,34 @@ X.0 <- cbind(1, elev.pred, elev.pred^2)
 coords.0 <- as.matrix(hbefElev[, c('Easting', 'Northing')])
 out.sp.ms.pred <- predict(out.sp.ms, X.0, coords.0)
 ```
+
+
+```{r, warning = FALSE, message = FALSE, fig.height = 4, fig.width = 7, fig.align = 'center', units = 'in'}
+plot.dat <- data.frame(x = hbefElev$Easting, 
+                       y = hbefElev$Northing, 
+                       mean.psi = apply(out.sp.ms.pred$psi.0.samples[,1,], 2, mean), 
+                       sd.psi = apply(out.sp.ms.pred$psi.0.samples[,1,], 2, sd), 
+                       stringsAsFactors = FALSE)
+# Make a species distribution map showing the point estimates,
+# or predictions (posterior means)
+dat.stars <- st_as_stars(plot.dat, dims = c('x', 'y'))
+ggplot() + 
+  geom_stars(data = dat.stars, aes(x = x, y = y, fill = mean.psi)) +
+  scale_fill_viridis_c(na.value = 'transparent') +
+  labs(x = 'Easting', y = 'Northing', fill = '', 
+       title = 'Mean OVEN occurrence probability') +
+  theme_bw()
+# Map of the associated uncertainty of these predictions
+# (i.e., posterior sds)
+ggplot() + 
+  geom_stars(data = dat.stars, aes(x = x, y = y, fill = sd.psi)) +
+  scale_fill_viridis_c(na.value = 'transparent') +
+  labs(x = 'Easting', y = 'Northing', fill = '', 
+       title = 'SD OVEN occurrence probability') +
+  theme_bw()
+```
+
+
 
 # Single-species integrated occupancy models
 

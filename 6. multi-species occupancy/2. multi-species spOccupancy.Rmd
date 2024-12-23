@@ -1,6 +1,6 @@
 ---
 title: "multi-species occupancy"
-author: "Viorel Popescu"
+author: "excerpt from 'Introduction to spOccupancy' Jeffrey W. Doser, Andrew O. Finley, Marc Kery, Elise F. Zipkin"
 date: "2024-04-02"
 output:
   html_document:
@@ -9,38 +9,21 @@ output:
     theme: spacelab
     toc: yes
     toc_depth: 2
+editor_options: 
+  chunk_output_type: console
 ---
-
-<style type="text/css">
-
-body, td {
-   font-size: 14px;
-}
-code.r{
-  font-size: 12px;
-}
-pre {
-  font-size: 12px
-}
-</style>
-
-
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 *Modern Methods in Ecological Modeling, Kunming Institute of Zoology, April 2024*
-```{r}
-
-```
-
 
 # Fitting multi-species occupancy models with msPGOcc()
 
 *spOccupancy* uses nearly identical syntax for fitting multi-species occupancy models as it does for single-species models and provides the same functionality for posterior predictive checks, model assessment and selection using WAIC and k-fold cross-validation, and out of sample prediction. The msPGOcc() function fits nonspatial multi-species occupancy models using Pólya-Gamma latent variables, which results in substantial increases in run time compared to standard implementations of logit link multi-species occupancy models. msPGOcc() has exactly the same arguments as PGOcc():
 
-```{}
+```{r, eval = FALSE}
 msPGOcc(occ.formula, det.formula, data, inits, n.samples, priors, 
         n.omp.threads = 1, verbose = TRUE, n.report = 100, 
         n.burn = round(.10 * n.samples), n.thin = 1, n.chains = 1,
@@ -51,8 +34,13 @@ For illustration, we will use the Hubbard Brook data in hbef2015, which is integ
 
 ```{r}
 library(spOccupancy)
+library(coda)
+library(stars)
+library(ggplot2)
+library(tidyverse)
+
 data(hbef2015)
-str(hbef2015) # Remind ourselves of what's in it (not shown).
+str(hbef2015) # Remind ourselves about the data format
 ```
 
 We will model occurrence for all species as a function of linear and quadratic terms for elevation, and detection as a function of linear and quadratic day of survey as well as the time of day during which the survey was conducted. These models are specified in occ.formula and det.formula as before, which reference variables stored in the data list. Random intercepts can be included in both the occurrence and detection portions of the occupancy model using lme4 syntax (Bates et al. 2015). For multi-species models, the multi-species detection-nondetection data y is now a three-dimensional array with dimensions corresponding to species, sites, and replicates. This is how the data are provided in the hbef2015 object, so we don’t need to do any additional preparations.
@@ -116,7 +104,7 @@ The resulting object out.ms is a list of class msPGOcc() consisting primarily of
 ```{r}
 summary(out.ms)
 # Or more explicitly
-# summary(out.ms, level = 'both')
+summary(out.ms, level = 'both')
 ```
 
 Looking at the community-level variance parameters, we see substantial variability in the average occurrence (the intercept) for the twelve species, as well as considerable variability in the effect of elevation across the community. There appears to be less variability across species in the detection portion of the model. We can look directly at the species-specific effects to confirm this. All community-level Rhat values are less than 1.1 and most species-level Rhat values are less than 1.1, with the exception of a few of the parameters for rare species. Mixing of the MCMC chains appears adequate when looking at the ESS values, although we can clearly see the ESS is lower for rare species (e.g., AMRE, BAWW) compared to more common species in the forest (e.g., OVEN, REVI).
@@ -153,13 +141,56 @@ k-fold cross-validation is again accomplished using the k.fold argument as we ha
  threads will generally involve substantial decreases in run time. For multi-species models, a separate deviance measure is reported for each species as a measure of predictive capacity, allowing for comparisons across multiple models for individual species, as well as for the entire community (by summing all species-specific values).
 
 # Prediction
-Prediction with msPGOcc objects is exactly analogous to what we saw with PGOcc. We can use the *predict* function along with a data frame of covariates at new locations. We can predict across the entire HBEF for all twelve species using the elevation data stored in hbefElev.
+
+All model objects resulting from a call to `spOccupancy` model-fitting functions can be used with `predict()` to generate a series of posterior predictive samples at new locations, given the values of all covariates used in the model fitting process. The object `hbefElev` (which comes as part of the `spOccupancy` package) contains elevation data at a 30x30m resolution from the National Elevation Data set across the entire HBEF. We can predict across the entire HBEF for all twelve species using the elevation data stored in hbefElev. We load the data below
 
 ```{r}
-elev.pred <- (hbefElev$val - mean(ovenHBEF$occ.covs[, 1])) / sd(ovenHBEF$occ.covs[, 1])
+data(hbefElev)
+str(hbefElev)
+```
+
+The column `val` contains the elevation values, while `Easting` and `Northing` contain the spatial coordinates that we will use for plotting. We can obtain posterior predictive samples for the occurrence probabilities at these sites by using the `predict()` function and our `msPGOcc` fitted model object. Given that we standardized the elevation values when we fit the model, we need to standardize the elevation values for prediction using the exact same values of the mean and standard deviation of the elevation values used to fit the data. 
+
+```{r}
+elev.pred <- (hbefElev$val - mean(hbef2015$occ.covs[, 1])) / sd(hbef2015$occ.covs[, 1])
 X.0 <- cbind(1, elev.pred, elev.pred^2)
 
 out.ms.pred <- predict(out.ms, X.0)
 ```
+
+Plot maps for each species. The species is specified in the *plot.dat* object below by changing the number between the 2 commas --> out.ms.pred$psi.0.samples[,**1**,], where 1 is the first species in our dataset, 2 is the second, 3 is the third etc... all the way to 12. The order of the species in the dataset is:
+AMRE, BAWW, BHVI, BLBW, BLPW, BTBW, BTNW, CAWA, MAWA, NAWA, OVEN, REVI
+
+```{r}
+sp.names <- dimnames(hbef2015$y)[[1]]
+```
+
+```{r}
+plot.dat <- data.frame(x = hbefElev$Easting, 
+                       y = hbefElev$Northing, 
+                       mean.psi = apply(out.ms.pred$psi.0.samples[,5,], 2, mean), 
+                       sd.psi = apply(out.ms.pred$psi.0.samples[,5,], 2, sd), 
+                       stringsAsFactors = FALSE)
+
+# Make a species distribution map showing the point estimates,
+# or predictions (posterior means)
+dat.stars <- st_as_stars(plot.dat, dims = c('x', 'y'))
+ggplot() + 
+  geom_stars(data = dat.stars, aes(x = x, y = y, fill = mean.psi)) +
+  scale_fill_viridis_c(na.value = 'transparent') +
+  labs(x = 'Easting', y = 'Northing', fill = '', 
+       title = paste("Mean", sp.names[5], "occurrence probability")) +
+  theme_bw()
+  
+# Map of the associated uncertainty of these predictions
+# (i.e., posterior sds)
+ggplot() + 
+  geom_stars(data = dat.stars, aes(x = x, y = y, fill = sd.psi)) +
+  scale_fill_viridis_c(na.value = 'transparent') +
+  labs(x = 'Easting', y = 'Northing', fill = '', 
+       title = paste("SD", sp.names[5], "occurrence probability")) +
+  theme_bw()
+```
+
 
 THE END
