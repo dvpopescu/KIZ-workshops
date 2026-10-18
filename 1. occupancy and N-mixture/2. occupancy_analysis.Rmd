@@ -25,9 +25,6 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 *Modern Methods in Ecological Modeling, Kunming Institute of Zoology, April 2024*
-```{r}
-
-```
 
 
 # ANALYSIS OF AN OCCUPANCY DATASET
@@ -40,16 +37,11 @@ After simulating and analyzing simulated data, let's analyze an occupancy datase
    To explore occupancy predictions and prepare the foundation for multi-year (dynamic) occupancy models
 
 ```{r set up working directory and upload data}
-setwd('C:\\Users\\viore\\Dropbox\\Columbia\\KIZ\\workshop materials\\occupancy and N-mixture')
-
-mink <- read.csv("minkfrogs_occ.csv", header=T)
+# paths are relative to this .Rmd file's folder (no setwd needed when knitting)
+mink <- read.csv("data/minkfrogs_occ.csv", header=T)
 
 names(mink)
 str(mink)
-
-# we need to 'attach' the file for unmarked to work; usually it is not 
-# recommended to use this function
-attach(mink) 
 
 library(unmarked)
 library(MuMIn)
@@ -57,7 +49,7 @@ library(MuMIn)
 
 First,  calculate the naive occupancy (not adjusted for detection probability) by dividing the number of sites where species was detected to the total number of sites
 
-```{r maive occupancy}
+```{r naive occupancy}
 minkfrog_naive <- sum(apply(mink[,3:6], 1, sum) > 0) / nrow(mink)
 minkfrog_naive
 ```
@@ -71,15 +63,20 @@ Create an R object that can be read by the 'unmarked' package. The object contai
              that may influence detection
              - these variables are used to model DETECTION
 
+Note on standardizing observation covariates: *scale()* applied to a matrix standardizes each column (visit) separately, which would remove the differences in Date between visits. Instead, we standardize the whole Date matrix using one overall mean and SD.
+
 ```{r create an R object that unmarked can recognize}
+Julian <- as.matrix(mink[, c("Julian1", "Julian2", "Julian3", "Julian4")])
+Date_scaled <- (Julian - mean(Julian, na.rm=TRUE)) / sd(Julian, na.rm=TRUE)
+
 minkUMF <- with(mink, {
   unmarkedFrameOccu(
-    
+
     y = cbind(LISE1, LISE2, LISE3, LISE4),
-    
+
     siteCovs = data.frame(scale(JulyTemp), scale(DO), scale(DistMFbreed), Beaver),
-    
-    obsCovs = list(Date = scale(cbind(Julian1, Julian2, Julian3, Julian4)),
+
+    obsCovs = list(Date = Date_scaled,
                    Wind = cbind(Wind1, Wind2, Wind3, Wind4),
                    Sky = cbind(Sky1, Sky2, Sky3, Sky4)))
 })
@@ -178,7 +175,7 @@ PAO-minkfrog_naive
 
 There is a difference between the estimated Proportion of Area Occupied and the naive occupancy estimates, suggesting that one or more sites that were surveyed are likely occupied by mink frogs, but were never detected during the study. As such, not accounting for imperfect detection would have underestimated the true occupancy of mink frogs in the study area.
 
-Finally, let's plot some of our findings; for now, let's use the top model (model.o3) to examine the relationships between the probability of detection and each of the detection covariates and between the probability of occupancy and the occupancy covariate DO
+Finally, let's plot some of our findings; for now, let's use the top model (mink.o3) to examine the relationships between the probability of detection and each of the detection covariates and between the probability of occupancy and the occupancy covariate DO
 
 ```{r detection covariate plots}
 # plot detection predictions 
@@ -221,8 +218,7 @@ lines(Sky_grid, Sky_pred$upper)
 DO_grid <- seq(min(minkUMF@siteCovs$scale.DO.), 
                 max(minkUMF@siteCovs$scale.DO.), 
                 length = 50)
-scale.DO. <- DO_grid
-DO_pred <- predict(mink.o3, type = "state", as.data.frame(DO_grid))
+DO_pred <- predict(mink.o3, type = "state", data.frame(scale.DO. = DO_grid))
 str(DO_pred)
 
 plot(DO_grid,

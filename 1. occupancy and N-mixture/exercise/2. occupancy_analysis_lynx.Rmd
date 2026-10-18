@@ -1,5 +1,5 @@
 ---
-title: "Single-species single-season occupancy models - dataset and analysis"
+title: "Single-species single-season occupancy models - lynx exercise"
 author: "Viorel Popescu"
 date: "2023-10-05"
 output: html_document
@@ -13,23 +13,17 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # ANALYSIS OF AN OCCUPANCY DATASET
 
-After simulating and analyzing simulated data, let's analyze an occupancy dataset of mink frog (Lithobates septentrionalis) occurrence from the Adirondack Mountains, New York State
+Let's apply the same workflow used for mink frogs to a camera-trap dataset of Eurasian lynx (*Lynx lynx*) detections at 64 trap stations (8 sampling occasions; effort = number of active camera-days per occasion).
 
- The specific objectives of this document are:
-   To document the data management and occupancy analysis process;
+ The specific objectives of this exercise are:
    To conduct a simple occupancy analysis in R using the unmarked package; and
-   To explore occupancy predictions and prepare the foundation for multi-year (dynamic) occupancy models
+   To explore occupancy and detection predictions for lynx
 
-```{r set up working directory and upload data}
-
+```{r upload data}
 lynx <- read.csv("Lynx_data.csv", header=T)
 
 names(lynx)
 str(lynx)
-
-# we need to 'attach' the file for unmarked to work; usually it is not 
-# recommended to use this function
-attach(lynx) 
 
 library(unmarked)
 library(MuMIn)
@@ -37,8 +31,9 @@ library(MuMIn)
 
 First,  calculate the naive occupancy (not adjusted for detection probability) by dividing the number of sites where species was detected to the total number of sites
 
-```{r maive occupancy}
-lynx_naive <- sum(apply(lynx[,2:9], 1, sum) > 0) / nrow(lynx)
+```{r naive occupancy}
+# occasions with 0 camera-days are NA (not surveyed), so we use na.rm=TRUE
+lynx_naive <- sum(apply(lynx[,2:9], 1, sum, na.rm=TRUE) > 0) / nrow(lynx)
 lynx_naive
 ```
 
@@ -51,7 +46,12 @@ Create an R object that can be read by the 'unmarked' package. The object contai
              that may influence detection
              - these variables are used to model DETECTION
 
+Note on standardizing observation covariates: *scale()* applied to a matrix standardizes each column (occasion) separately, which would remove the differences in Effort between occasions. Instead, we standardize the whole Effort matrix using one overall mean and SD. Occasions with 0 camera-days have NA detections (the camera was not active), so unmarked will ignore them.
+
 ```{r create an R object that unmarked can recognize}
+Days <- as.matrix(lynx[, paste0("Days_", 1:8)])
+Effort_scaled <- (Days - mean(Days, na.rm=TRUE)) / sd(Days, na.rm=TRUE)
+
 lynxUMF <- with(lynx, {
   unmarkedFrameOccu(
     
@@ -60,8 +60,7 @@ lynxUMF <- with(lynx, {
     
     siteCovs = data.frame(scale(Altitude), scale(TRI5), scale(Prop_forest),
                           scale(denslocalr)),
-    obsCovs = list(Effort = scale(cbind(Days_1, Days_2, Days_3, Days_4,
-                                        Days_5, Days_6, Days_7, Days_8))))
+    obsCovs = list(Effort = Effort_scaled))
 })
 
 plot(lynxUMF)
@@ -87,10 +86,9 @@ selection_d = model.sel(modlist_d)
 selection_d
 ```
 
-The best model is mink.d2: variables Date and Sky are best for explaining variation in detection probability. We now use these 2 variables to build several models that explore predictors for occupancy.
+Check the selection table: if the model with Effort ranks best, we use Effort as the detection covariate to build several models that explore predictors for occupancy.
 
 ```{r run several occupancy models}
-# climate predictors 
 lynx.o1 = occu(~Effort ~scale.Altitude. + scale.TRI5. + scale.denslocalr., data=lynxUMF)
 
 lynx.o2 = occu(~Effort  ~scale.TRI5. + scale.denslocalr., data=lynxUMF)
@@ -142,9 +140,9 @@ PAO
 lynx_naive 
 PAO-lynx_naive
 
-0.075*64
+PAO * nrow(lynx) # estimated number of occupied trap sites
 
-se <- sqrt(sum((1/64^2)*psipred$se.fit^2))
+se <- sqrt(sum((1/nrow(lynx)^2)*psipred$se.fit^2)) # approximate SE of PAO (ignores covariance among sites)
 se
 ```
 
@@ -152,9 +150,9 @@ se
 
 
 ```{r}
-Pdet_abund <- predict(lynx.o3, type="state")
-Pdet_abund # predicted abundance at each trap location 
-mean(Pdet_abund$Predicted) # mean predicted abundance across all traps
+lynx_psi <- predict(lynx.o3, type="state")
+lynx_psi # predicted occupancy probability at each trap location
+mean(lynx_psi$Predicted) # mean predicted occupancy across all traps
 
 lcab <- linearComb(lynx.o3, c(1, -4), type="state")
 lcab <- backTransform(lcab)
@@ -162,9 +160,9 @@ lcab
 ```
 
 ```{r}
-Pdet_det <- predict(lynx.o3, type="det")
-head(Pdet_det)
-mean(Pdet_det$Predicted)
+lynx_det <- predict(lynx.o3, type="det")
+head(lynx_det)
+mean(lynx_det$Predicted)
 
 lcdet <- linearComb(lynx.o3, c(1, -3), type="det")
 lcdet <- backTransform(lcdet)
@@ -172,13 +170,13 @@ lcdet
 ```
 
 
-There is a difference between the estimated Proportion of Area Occupied and the naive occupancy estimates, suggesting that one or more sites that were surveyed are likely occupied by mink frogs, but were never detected during the study. As such, not accounting for imperfect detection would have underestimated the true occupancy of mink frogs in the study area.
+There is a difference between the estimated Proportion of Area Occupied and the naive occupancy estimates, suggesting that one or more sites that were surveyed are likely occupied by lynx, but lynx were never detected there during the study. As such, not accounting for imperfect detection would have underestimated the true occupancy of lynx in the study area.
 
-Finally, let's plot some of our findings; for now, let's use the top model (model.o3) to examine the relationships between the probability of detection and each of the detection covariates and between the probability of occupancy and the occupancy covariate DO
+Finally, let's plot some of our findings; for now, let's use model lynx.o3 to examine the relationships between the probability of detection and Effort, and between the probability of occupancy and the occupancy covariate Prop_forest
 
 ```{r detection covariate plots}
-# plot detection predictions 
-# predictions for DATE
+# plot detection predictions
+# predictions for EFFORT
 Effort_grid <- seq(min(lynxUMF@obsCovs$Effort), 
                    max(lynxUMF@obsCovs$Effort), 
                    length = 50)
@@ -202,8 +200,7 @@ lines(Effort_grid, Effort_pred$upper)
 forest_grid <- seq(min(lynxUMF@siteCovs$scale.Prop_forest.), 
                 max(lynxUMF@siteCovs$scale.Prop_forest.), 
                 length = 50)
-scale.Prop_forest. <- forest_grid
-forest_pred <- predict(lynx.o3, type = "state", as.data.frame(forest_grid))
+forest_pred <- predict(lynx.o3, type = "state", data.frame(scale.Prop_forest. = forest_grid))
 str(forest_pred)
 
 plot(forest_grid,
