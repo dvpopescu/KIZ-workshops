@@ -7,8 +7,10 @@ output:
   rmarkdown::html_vignette:
     toc: true
     toc_depth: 3
-bibliography: [references.bib]
-biblio-style: apalike
+# references.bib is not in this folder (it ships with the spOccupancy source);
+# commented out so the file knits. Citations will show as raw @keys.
+# bibliography: [references.bib]
+# biblio-style: apalike
 vignette: >
   %\VignetteIndexEntry{modelFitting}
   %\VignetteEngine{knitr::rmarkdown}

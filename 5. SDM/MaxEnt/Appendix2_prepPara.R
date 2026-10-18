@@ -1,5 +1,5 @@
 # A function that implements Maxent parameters using the general R manner
-prepPara <- function(userfeatures=NULL, #NULL=autofeature, could be any combination of # c("L", "Q", "H", "H", "P")
+prepPara <- function(userfeatures=NULL, #NULL=autofeature, could be any combination of # "L","Q","H","P","T", e.g. "LQ" or "LQH"
                      responsecurves=TRUE,
                      jackknife=TRUE,      
                      outputformat="logistic",

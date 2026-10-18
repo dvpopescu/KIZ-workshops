@@ -1,3 +1,6 @@
+# NOTE: run with the working directory set to this script's folder
+# (RStudio: Session > Set Working Directory > To Source File Location);
+# the two CSV files are read from this folder.
 
 library(spOccupancy)
 library(coda)
@@ -29,7 +32,8 @@ Precipitation <- as.matrix(Precipitation) # we need the data as a matrix
 det.covs <- list(Julian = Julian_Day, Precip = Precipitation)
 str(det.covs)
 
-# create a LIST of observation covariates
+# create a LIST of occupancy (site-level) covariates
+# (covariate rows are in the same trap order E1-E25, M1-M25 as the species data)
 occ.covs <- list(Canopy = vars[,2], Groundcover = vars[,4], VolDeadWood = vars[,9])
 
 # read and organize species  data
@@ -53,7 +57,7 @@ J <- length(site.code)
 
 
 # manipulate species observations into an 3D ARRAY with dimensions:
-# 1) number of species (12); 2) number of sites (50) and 3) number of visits (12) 
+# 1) number of species (28); 2) number of sites (50) and 3) number of visits (12)
 # this operation may differ based on the current format of your data, but in the 
 # end it has to have the same structure as the 'hbef2015' data
 
@@ -77,8 +81,9 @@ df
 df1 <- aperm(simplify2array(by(df,df$Species,as.matrix)), c(3,1,2))[,,-1]
 str(df1)
 
-# for some reason, the 1's and 0's are now characters, so we have to covert them
-# back to numbers
+# the 1's and 0's are now characters (as.matrix() on a data frame that still
+# contains the character 'Species' column gives a character matrix), so we have
+# to covert them back to numbers
 df2 <- as.numeric(df1)
 str(df2)
 
@@ -156,9 +161,12 @@ plot(out.ms, 'alpha', density = TRUE) # Detection parameters.
 ppc.ms.out <- ppcOcc(out.ms, 'chi-squared', group = 1)
 summary(ppc.ms.out)
 
-# CANNOT CREATE THE PREDICTIVE CHECK GRAPH BECAUSE OF "NA" DATA 
-ppc.df <- data.frame(fit = ppc.ms.out$fit.y, 
-                     fit.rep = ppc.ms.out$fit.y.rep, 
+# For multi-species models, fit.y and fit.y.rep are matrices
+# (posterior samples x species), so we plot the check for one species at a time
+# (here species 10; see spp.names for the order)
+sp.ppc <- 10
+ppc.df <- data.frame(fit = ppc.ms.out$fit.y[, sp.ppc],
+                     fit.rep = ppc.ms.out$fit.y.rep[, sp.ppc],
                      color = 'lightskyblue1')
 ppc.df$color[ppc.df$fit.rep > ppc.df$fit] <- 'lightsalmon'
 plot(ppc.df$fit, ppc.df$fit.rep, bg = ppc.df$color, pch = 21, 
@@ -179,8 +187,10 @@ waicOcc(out.ms, by.sp = TRUE)
 
 deadwood.pred <- seq(min(scale(beetle_data$occ.covs$VolDeadWood)), 
                   max(scale(beetle_data$occ.covs$VolDeadWood)), 0.1)
-X.1 <- cbind(1, deadwood.pred, rep(mean(scale(beetle_data$occ.covs$Canopy)),40),
-             rep(mean(scale(beetle_data$occ.covs$Groundcover)),40))
+# other covariates held at their (scaled) mean; length matches deadwood.pred
+X.1 <- cbind(1, deadwood.pred,
+             rep(mean(scale(beetle_data$occ.covs$Canopy)), length(deadwood.pred)),
+             rep(mean(scale(beetle_data$occ.covs$Groundcover)), length(deadwood.pred)))
 out.pred1 <- predict(out.ms, X.1)
 
 str(out.pred1)

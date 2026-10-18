@@ -2,18 +2,25 @@
 ####  Species distribution modeling for saproxylic beetles in Romania  ####
 ###########################################################################
 
-#myBiomodEM <- get(load('D:/Doctorat/Articole/SDM_Romania/SDM/R_PROJ_CERAMBYX/cerambyx/cerambyx.cerambyxFirstModeling.ensemble.models.out'))
+# WORKING DIRECTORY: all paths in this script are relative to the "ensembleSDM" folder
+# (the folder that contains OCC/ and ENV/). Open this script from that folder, or use
+# Session > Set Working Directory > To Source File Location in RStudio, or:
+# setwd("path/to/5. SDM/ensembleSDM")
+# biomod2 writes its outputs into a sub-folder named after the species ("cerambyx/"),
+# and the csv/png outputs below are also written into this folder.
+
+#to reload a previously saved ensemble model (example from the author's original project):
+#myBiomodEM <- get(load('cerambyx/cerambyx.cerambyxFirstModeling.ensemble.models.out'))
 #install the packages required for the script
-#install.packages(c("biomod2","raster","dplyr","rgdal","beepr"))
+#install.packages(c("biomod2","raster","terra","dplyr","rasterVis","beepr"))
+# (rgdal was retired from CRAN in 2023 and is not needed: raster/terra read the .tif files)
 
 #load the libraries
 library(biomod2)
 library(raster)
 library(dplyr)
-library(rgdal)
 library(terra)
 library(rasterVis)
-library(beepr) #This needs to be taken out of the script. It makes a sound when it's ready...
 
 #check packages
 (.packages())
@@ -147,7 +154,8 @@ var.cluster  <-  hclust(1 - var.dist)
 
 #plot dendrogram
 png("correlation_dendrogram_cerambyx.png", width = 1200, height = 900)
-plot_dendrogram <- plot(var.cluster) + abline(h = 0.25, lty = 2, lwd = 2)# variables that have a correlation < 0.75
+plot(var.cluster)
+abline(h = 0.25, lty = 2, lwd = 2) # variables that have a correlation < 0.75
 dev.off()
 
 ###########################################################################
@@ -203,7 +211,7 @@ myBiomodModelOut <- BIOMOD_Modeling(bm.format = myBiomodData,
 
 #get_evaluations(myBiomodModelOut, as.data.frame = TRUE)
 
-#get all models evaluation (GLM, RF and MAXENT)
+#get all models evaluation (GLM, GAM, GBM, RF and MAXNET)
 myBiomodModelEval <- get_evaluations(myBiomodModelOut)
 myBiomodModelEval
 table_evaluation <- myBiomodModelEval
@@ -572,5 +580,6 @@ EnsM6 <- BIOMOD_EnsembleForecasting(
 ###########################################################################
 
 
-beep("ready")
+#optional: play a sound when the script is finished (only if the 'beepr' package is installed)
+if (requireNamespace("beepr", quietly = TRUE)) beepr::beep("ready")
 
