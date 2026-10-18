@@ -25,9 +25,6 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 *Modern Methods in Ecological Modeling, Kunming Institute of Zoology, April 2024*
-```{r}
-
-```
 
 
 An alternative to the much **beloved program MARK** is the R package *'marked'*, developed by Jeff Laake and collaborators (Laake et al. 2013). The full citation for this package is below, and the vignette that explains the reasoning behind the development of this package can be found here: 
@@ -40,12 +37,11 @@ In general, the package 'marked' aims to ease the implementation of capture-reca
 
 ## LET'S START CODING!!!
 
-First, install the package 'marked' and call it into R. Then set the working directory to the capture-recapture file provided (AA for marked.txt). This dataset if for two colonies of swifts (Apus apus), a small insectivorous bird. The dataset contains two colonies, coded "G" (good) and "P" (poor), and the goal is to evaluate differences in apparent survival and recapture probability between the two colonies. However, this dataset can be used to examine trends in survival through time and other explorations.
+First, install the package 'marked' and call it into R. The capture-recapture file (AA for marked.txt) is in the same folder as this .Rmd, so no working directory needs to be set when knitting. This dataset if for two colonies of swifts (Apus apus), a small insectivorous bird. The dataset contains two colonies, coded "G" (good) and "P" (poor), and the goal is to evaluate differences in apparent survival and recapture probability between the two colonies. However, this dataset can be used to examine trends in survival through time and other explorations.
 
 ```{r}
 #install.packages("marked")
 library(marked)
-setwd('C:\\Users\\viore\\Dropbox\\Columbia\\KIZ\\workshop materials\\capture-recapture')
 ```
 
 Next, you need to ask R to correctly read the recapture history as a *character*, and the grouping variable (colony in this case) as a *factor*. Otherwise, R will mess up and everything will be converted to integers, which 'marked' will absolutely **hate**. To do so, you need to use the *colClasses* function as described below.
@@ -69,32 +65,31 @@ AA.ddl <- make.design.data(AA.proc)
 We now have all the building blocks to start parameterizing capture-recapture models! So, let's try to run a model using *'marked'*! Let's model survival probability (**Phi**) as a function of *colony* and *time*, and recapture probability (**p**) as a function of time. The formulas below are intuitive
 
 ```{r}
-mod.Phicolonytime.ptime <- crm(AA.proc,AA.ddl, model = 'csj', groups = "colony",
+mod.Phicolonytime.ptime <- crm(AA.proc,AA.ddl, model = "CJS", groups = "colony",
                     model.parameters = list(Phi = list(formula=~colony+time),
                                             p = list(formula=~time)),hessian=T)
 
-# let's check out the results! Copy and paste them into a document, 
+# let's check out the results! Copy and paste them into a document,
 # as we will want to compare them to the results from RMark.
 mod.Phicolonytime.ptime
 
-
-mod.Phicolony.ptime <- crm(AA.proc,AA.ddl, model = 'csj', groups = "colony",
+# constant survival and constant recapture
+mod.Phidot.pdot <- crm(AA.proc,AA.ddl, model = "CJS", groups = "colony",
                     model.parameters = list(Phi = list(formula=~1),
                                             p = list(formula=~1)),hessian=T)
 
-# let's check out the results! Copy and paste them into a document, 
+# let's check out the results! Copy and paste them into a document,
 # as we will want to compare them to the results from RMark.
-mod.Phicolony.ptime
+mod.Phidot.pdot
 
 
 ```
 
 Also, let's compute the 'real' parameter estimates
 ```{r}
-#phis <- compute.real(mod.Phisex.pdot,"Phi",unique=TRUE,vcv=TRUE)
-phis <- predict(mod.Phicolony.ptime)$Phi
+phis <- predict(mod.Phidot.pdot)$Phi
 phis
-ps <- predict(mod.Phicolony.ptime)$p
+ps <- predict(mod.Phidot.pdot)$p
 ps
 ```
 
@@ -146,19 +141,22 @@ You will notice that nothing happended, and no models were run. This is because 
 AA.models=fit.models()
 AA.models
 ```
-Let's investigate model predictions for survival and detection based on out top model, which is denoted as model '2' in the AICc table above (see first table column). Are there significant differences in survival between the 2 colonies? HINT: evaluate whether the 95% confidence interval (denoted as 'lcl' (lower) and 'ucl' (upper)) overlap.
+Let's investigate model predictions for survival and detection based on our top model, i.e., the first row of the AIC table above; its model number is shown in the first table column (model '2', Phi(~colony)p(~colony + time), when this script was written). The code below picks the top model automatically. Are there significant differences in survival between the 2 colonies? HINT: evaluate whether the 95% confidence interval (denoted as 'lcl' (lower) and 'ucl' (upper)) overlap.
 
 ```{r}
-Phi_by_colony <- predict(AA.models[[2]])$Phi
+top <- as.numeric(rownames(AA.models$model.table)[1]) # number of the top-ranked model
+AA.models$model.table[1, "model"]
+Phi_by_colony <- predict(AA.models[[top]])$Phi
 Phi_by_colony
-p_by_colony.time <- predict(AA.models[[2]])$p
+p_by_colony.time <- predict(AA.models[[top]])$p
 p_by_colony.time
 ```
 
-Let's plot the results of showing survival through time (although the time-dependent model did not come out as one of our top models). First, let's pick a model that includes time as a variable for phi by checking he model number in the AICc table above (model 13 seems to be one we can use).   
+Let's plot the results of showing survival through time (although the time-dependent model did not come out as one of our top models). First, let's pick a model that includes time as a variable for phi by checking the model number in the AIC table above (model 13, Phi(~time)p(~colony), is one we can use).
 
 
 ```{r}
+AA.models$model.table["13", "model"] # check that this is Phi(~time)p(~colony)
 Phi_by_year <- predict(AA.models[[13]])$Phi
 Phi_by_year
 ```

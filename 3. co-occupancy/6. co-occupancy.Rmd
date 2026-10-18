@@ -49,32 +49,35 @@ library(PerformanceAnalytics)
 
 # Source additional script --------------------------------------------------
 
-Source code provided from Ken Kellner to fix package bugs related to the predict function; make sure that this script is in the same working directory or that you provide the correct path. This section uses the package 'unmarked'
+Source code provided by Ken Kellner to fix package bugs related to the predict function in older versions of 'unmarked'. The fix replaces an internal unmarked function, and unmarked was substantially reorganized internally in version 1.5, so we only load the fix for older versions. If you have unmarked >= 1.5, update to the latest version and the fix is not needed (if predictions with *newdata* fail, please let the instructor know).
 
 ```{r}
-source('om_predict_fix.R')
+packageVersion("unmarked")
+if (packageVersion("unmarked") < "1.5.0") source('om_predict_fix.R')
 ```
 
 # Read in data -----------------------------------------------------------
 
+Paths are relative to this .Rmd file's folder. In the detection history, occasions when a camera was not active (0 trap-days in the effort file) are coded NA (not surveyed), not 0 (not detected).
+
 ```{r}
 # detection history
-winter_spp <- 
-  read.csv('lynx_wolf_matrix_winter.csv') %>% 
+winter_spp <-
+  read.csv('data/species_matrix_winter.csv') %>%
   
   # set Trapcode as factor
   mutate(TrapCode = as.factor(TrapCode))
 
 # trap effort/observation covaraites
 winter_traps <- 
-  read.csv('trap_effort_winter.csv') %>% 
+  read.csv('data/trap_effort_winter.csv') %>%
   
   # set Trapcode as factor
   mutate(TrapCode = as.factor(TrapCode))
 
 # site covariates
 winter_sites <- 
-  read.csv('cams_data_winter.csv') %>% 
+  read.csv('data/cams_data_winter.csv') %>%
   
   # alter variable structure
   mutate(TrapCode = as.factor(TrapCode),
@@ -167,8 +170,8 @@ winter_occ_data <-
 ```{r}
 summary(winter_occ_data)
 # naive occupancy for each species (sites with at least 1 detection / total sites)
-# lynx 0.67
-# wolf 0.51
+# lynx 0.64
+# wolf 0.52
 
 plot(winter_occ_data)
 
@@ -277,7 +280,7 @@ summary(winter_W_rd)
 winter_W_OF_CLC <- c('~1', '~CLC_forest',
                      '~1')
 
-winter_W_CLC <- occuMulti(winter_LW_det, winter_W_OF_rd, winter_occ_data)
+winter_W_CLC <- occuMulti(winter_LW_det, winter_W_OF_CLC, winter_occ_data)
 summary(winter_W_CLC)
 
 # wolf elevation
@@ -339,7 +342,7 @@ modSel(winter_occ_mods)
 # Step 3: test co-occupancy variables ---------------------------------------
 
 ```{r}
-# lelevation
+# elevation
 winter_LW_OF_200 <- c('~CLC_forest', '~Z',
                        '~Z')
         
@@ -451,7 +454,7 @@ winter_W_low <-
 winter_W_up <- 
   mean(winter_W_mo$upper)
 
-# save predicted values for all three species and assign variable names to plot together
+# save predicted values for both species and assign variable names to plot together
 winter_pred <- 
   c(winter_L_pred ,winter_W_pred)
 
@@ -586,7 +589,7 @@ mean(winter_W_noL$Predicted)
 
 # Marginal occupancy graphs ---------------------------------------------
 
-Rhis section uses package ggplot2. I have provided code to make a marginal occupancy graph for one species based on one variable. You can use the template below to graph other species predictions and other variables
+This section uses package ggplot2. I have provided code to make a marginal occupancy graph for one species based on one variable. You can use the template below to graph other species predictions and other variables
 
 
 Create new data frame holding all variables constant except the one we want to plot using expand.grid function (in this case, wolf occupancy as a function of elevation). This new data frame must include all variables in the model including both detection on occupancy variables for all species and species combinations
@@ -625,12 +628,8 @@ winter_Epsi_203_W <-
          upr = Predicted + SE)
 
 # add raw data for x-axis to new data frame for plotting instead of scaled variable which is hard to interpret
-alt <- 
-  matrix(
-    seq(from = 663, 
-        to = 1600, 
-        length.out = 447),
-    ncol = 1)
+# (back-transform the scaled values: raw = scaled * SD + mean)
+alt <- winter_203_Z.df$Z * sd(winter_sites$Z) + mean(winter_sites$Z)
 
 # combined
 winter_Epsi_203_W <- 
@@ -686,14 +685,10 @@ winter_203_denslocalr.df <-
       diststream = mean(winter_sites.scaled$diststream)))
 
 # add raw data for x-axis to new data frame for plotting instead of scaled variable which is hard to interpret
-roads <- 
-  matrix(
-    seq(from = 0.21, 
-        to = 0.35, 
-        length.out = 401),
-    ncol = 1)
+# (back-transform the scaled values: raw = scaled * SD + mean)
+roads <- winter_203_denslocalr.df$denslocalr * sd(winter_sites$denslocalr) + mean(winter_sites$denslocalr)
 
-# get predicted values for co-occurrence of lynx and wolf with new data frame only varying values for CLC_forest
+# get predicted values for co-occurrence of lynx and wolf with new data frame only varying values for road density
 winter_Epsi_coOcc_LW<- 
   predict(winter_LW_203, 
           type = "state", 
@@ -724,7 +719,7 @@ winter_L_W_coOcc.plot <- ggplot(data = winter_Epsi_coOcc_LW, aes(x = roads,
                                                                  y = Predicted)) + 
   
   # add predicted line
-  geom_line(size = 1) +
+  geom_line(linewidth = 1) +
   
   # add error ribbon
   geom_ribbon(aes(ymin = lwr, 
@@ -758,12 +753,8 @@ winter_L_W_coOcc.plot
 We can use the new data frame created earlier for road density
 
 ```{r}
-roads <- 
-  matrix(
-    seq(from = 0.21, # min value for road density
-        to = 0.35,   # max value for road density
-        length.out = 401), # number of data points
-    ncol = 1)
+# raw road density values for the x-axis (same back-transformation as above)
+roads <- winter_203_denslocalr.df$denslocalr * sd(winter_sites$denslocalr) + mean(winter_sites$denslocalr)
 
 # create variable for predicted occupancy of each species conditional on every other species presence/absence
 
@@ -858,7 +849,7 @@ winter_Epsi_condOcc_all <-
         winter_Epsi_W_L, 
         winter_Epsi_W_noL) 
 
-View(winter_Epsi_condOcc_all)
+head(winter_Epsi_condOcc_all) # use View() to inspect interactively; View() can fail when knitting
 ```
 
 Produce graph
@@ -904,7 +895,7 @@ winter_condOcc.plot <- ggplot(data = winter_Epsi_condOcc_all, aes(x = roads,
   geom_line(aes(x = roads, 
                 y = Predicted, 
                 linetype = conditional), 
-            size = 0.5, 
+            linewidth = 0.5, 
             color = "black") +
   
   # rename axis labels

@@ -24,10 +24,7 @@ pre {
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-*Population Ecology GR6230, Fall 2023*
-```{r}
-
-```
+*Modern Methods in Ecological Modeling, Kunming Institute of Zoology, April 2024*
 
 
 While program **MARK** is the definitive resource for implementing a wide variety of capture-recaptuRe models, constructing and defining the model can become cumbersome for open population models that involve many parameters. Specifically, creating the PIM (parameter index matrix) for models with complex structures can be difficult for people just starting with this class of models, and their parameterization may be prone to human error. As such, Jeff Laake (2013) developed an R interface for program MARK, called *RMark*, which facilitates the implementation of a wide variety of capture-recapture models (although not all the options provided by program MARK). 
@@ -43,18 +40,18 @@ The goal of this exercise is to use *RMark* to implement a simple capture-recapt
 
 ## LET'S START CODING!
 
-First, install the package *RMark* and call it into R. Then set the working directory to the capture-recapture file provided (AA.inp). The file needs to contain the history of recaptures in one column, and grouping variables of covariates as subsequent columns.
+First, install the package *RMark* and call it into R. The capture-recapture file (AA.csv) is in the same folder as this .Rmd, so no working directory needs to be set when knitting. The file contains the history of recaptures in one column (*ch*), the number of individuals with that history (*freq*), and the grouping variable as a subsequent column (*colony*).
 
 ```{r}
 #install.packages("RMark")
 library(RMark)
-setwd('C:\\Users\\Viorel\\Dropbox\\Columbia\\teaching\\PopEco_Fall2023\\Labs\\Lab9 - Capture-recapture')
 ```
 
-Next, convert the .inp file to a file that can be used in *RMARK*. The Apus data has a grouping variable, which we will call *colony*, with 2 levels: colony P and colony G
+Next, read the data so that *RMark* can use it. The capture history must be read as *character* (otherwise R converts it to a number and drops leading zeros), and the grouping variable *colony* (2 levels: colony P and colony G) as a *factor*.
 
 ```{r}
-Apus <- convert.inp("AA for RMark", group.df=data.frame(colony=c("P","G")))
+Apus <- read.csv("AA.csv", colClasses=c("character","numeric","factor"))
+str(Apus)
 head(Apus)
 ```
 
